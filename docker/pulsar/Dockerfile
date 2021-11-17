@@ -41,7 +41,9 @@ RUN mkdir /pulsar/data
 FROM openjdk:11-jdk-slim
 
 # Install some utilities
-RUN  sed -i "s@/archive.ubuntu.com/@/mirrors.163.com/@g" /etc/apt/sources.list \
+RUN  add-apt-repository ppa:deadsnakes/ppa \
+     &&
+     sed -i "s@/archive.ubuntu.com/@/mirrors.163.com/@g" /etc/apt/sources.list \
          && rm -rf /var/lib/apt/lists/* \
          && apt-get update --fix-missing -o Acquire::http::No-Cache=True \
      && apt-get install -y netcat dnsutils less procps iputils-ping \
