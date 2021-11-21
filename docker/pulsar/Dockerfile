@@ -42,10 +42,7 @@ FROM openjdk:11-jdk-slim
 
 # Install some utilities
 RUN  add-apt-repository ppa:deadsnakes/ppa \
-     &&
-     sed -i "s@/archive.ubuntu.com/@/mirrors.163.com/@g" /etc/apt/sources.list \
-         && rm -rf /var/lib/apt/lists/* \
-         && apt-get update --fix-missing -o Acquire::http::No-Cache=True \
+     && apt-get update \
      && apt-get install -y netcat dnsutils less procps iputils-ping \
                  python3.7 python3.7-dev python3-setuptools python3-yaml python3-kazoo \
                  libreadline-gplv2-dev libncursesw5-dev libssl-dev libsqlite3-dev tk-dev libgdbm-dev libc6-dev libbz2-dev \
