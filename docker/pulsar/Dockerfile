@@ -23,7 +23,7 @@ FROM busybox as pulsar
 ARG PULSAR_TARBALL
 
 ADD ${PULSAR_TARBALL} /
-RUN mv /apache-pulsar-* /pulsar
+#RUN mv /apache-pulsar-* /pulsar
 
 COPY scripts/apply-config-from-env.py /pulsar/bin
 COPY scripts/apply-config-from-env-with-prefix.py /pulsar/bin
@@ -39,6 +39,18 @@ RUN mkdir /pulsar/data
 ### and add Python dependencies (for Pulsar functions)
 
 FROM openjdk:11-jdk-slim
+
+
+# 添加源
+RUN apt-get update && apt-get install -y gnupg2 \
+    && apt-key adv --keyserver keyserver.ubuntu.com --recv-keys  871920D1991BC93C
+
+COPY sources.list /etc/apt/sources.list
+
+# Install software-properties-common
+RUN apt-get update --fix-missing \
+    && apt-get install -y software-properties-common \
+    && apt-add-repository ppa:deadsnakes/ppa
 
 # Install some utilities
 RUN  add-apt-repository ppa:deadsnakes/ppa \
@@ -56,7 +68,7 @@ RUN python3.7 get-pip.py
 RUN update-alternatives --install /usr/bin/python python /usr/bin/python3 10
 
 RUN echo networkaddress.cache.ttl=1 >> $JAVA_HOME/conf/security/java.security
-ADD target/python-client/ /pulsar/pulsar-client
+#ADD target/python-client/ /pulsar/pulsar-client
 
 VOLUME  ["/pulsar/conf", "/pulsar/data"]
 
