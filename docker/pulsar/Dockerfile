@@ -23,7 +23,7 @@ FROM busybox as pulsar
 ARG PULSAR_TARBALL
 
 ADD ${PULSAR_TARBALL} /
-#RUN mv /apache-pulsar-* /pulsar
+RUN mv /apache-pulsar-* /pulsar
 
 COPY scripts/apply-config-from-env.py /pulsar/bin
 COPY scripts/apply-config-from-env-with-prefix.py /pulsar/bin
@@ -40,35 +40,59 @@ RUN mkdir /pulsar/data
 
 FROM openjdk:11-jdk-slim
 
+# 更改国内源时添加签名
+#RUN apt-get update && apt-get install -y gnupg2 \
+#    && apt-key adv --keyserver keyserver.ubuntu.com --recv-keys  7638D0442B90D010 \
+#    && apt-key adv --keyserver keyserver.ubuntu.com --recv-keys  CBF8D6FD518E17E1
 
-# 添加源
-RUN apt-get update && apt-get install -y gnupg2 \
-    && apt-key adv --keyserver keyserver.ubuntu.com --recv-keys  871920D1991BC93C
+# 更改国内源
+COPY sources-tuna-bullseye.list /etc/apt/sources.list
+RUN apt-get update && apt-get upgrade
 
-COPY sources.list /etc/apt/sources.list
+# 清华源安装https证书
+RUN apt install -y apt-transport-https ca-certificates
 
-# Install software-properties-common
-RUN apt-get update --fix-missing \
-    && apt-get install -y software-properties-common \
-    && apt-add-repository ppa:deadsnakes/ppa
+# 编译python源码并安装
+# 安装python先决条件【需要安装gcc make】
+RUN apt-get install -y build-essential checkinstall
+RUN apt-get install -y libncursesw5-dev libssl-dev \
+    libsqlite3-dev tk-dev libgdbm-dev libc6-dev libbz2-dev libffi-dev zlib1g-dev gcc make
+RUN apt-get clean all \
+	&& mkdir /usr/local/python3
+
+# 将下载好的python源码包copy到指定目录
+COPY Python-3.7.8.tgz  /usr/local/python3/
+# 编译python
+RUN set -ex \
+	&& cd /usr/local/python3 \
+	&& tar -xvf  Python-3.7.8.tgz \
+	&& cd Python-3.7.8 \
+	&& ./configure prefix=/usr/local/python3 \
+	&& make && make install \
+	&& ln -s /usr/local/python3/bin/python3.7 /usr/local/bin/python3.7 \
+	&& ln -s /usr/local/python3/bin/pip3 /usr/local/bin/pip3
+
+RUN set -ex \
+	&& cd /usr/local/python3 \
+	&& python3.7 -V
+
+RUN /usr/local/python3/bin/pip3 install pymysql
 
 # Install some utilities
-RUN  add-apt-repository ppa:deadsnakes/ppa \
-     && apt-get update \
-     && apt-get install -y netcat dnsutils less procps iputils-ping \
-                 python3.7 python3.7-dev python3-setuptools python3-yaml python3-kazoo \
+RUN apt-get update && apt-get install -y netcat dnsutils less procps iputils-ping \
+                 python3-setuptools python3-yaml python3-kazoo \
                  libreadline-gplv2-dev libncursesw5-dev libssl-dev libsqlite3-dev tk-dev libgdbm-dev libc6-dev libbz2-dev \
                  curl \
      && apt-get clean \
      && rm -rf /var/lib/apt/lists/*
-
+#
 RUN curl https://bootstrap.pypa.io/get-pip.py -o get-pip.py
 RUN python3.7 get-pip.py
 
 RUN update-alternatives --install /usr/bin/python python /usr/bin/python3 10
 
 RUN echo networkaddress.cache.ttl=1 >> $JAVA_HOME/conf/security/java.security
-#ADD target/python-client/ /pulsar/pulsar-client
+ADD target/python-client/ /pulsar/pulsar-client
 
 VOLUME  ["/pulsar/conf", "/pulsar/data"]
 
