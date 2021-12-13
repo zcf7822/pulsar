@@ -70,13 +70,13 @@ RUN set -ex \
 	&& ./configure prefix=/usr/local/python3 \
 	&& make && make install \
 	&& ln -s /usr/local/python3/bin/python3.7 /usr/local/bin/python3.7 \
-	&& ln -s /usr/local/python3/bin/pip3 /usr/local/bin/pip3
-
+	&& ln -s /usr/local/python3/bin/pip3 /usr/local/bin/pip3.7 \
+    && ln -s /usr/local/python3/bin/python3.7 /usr/bin/python3.7 \
+    && ln -s /usr/local/python3/bin/pip3 /usr/bin/pip3.7
 RUN set -ex \
 	&& cd /usr/local/python3 \
 	&& python3.7 -V
 
-RUN /usr/local/python3/bin/pip3 install pymysql
 
 # Install some utilities
 RUN apt-get update && apt-get install -y netcat dnsutils less procps iputils-ping \
