@@ -64,7 +64,7 @@ RUN set -ex \
 # Note that the libpq-dev package is needed here in order to install
 # the required python psycopg2 package (for postgresql) later
 RUN apt-get update \
-    && apt-get -y install  postgresql sudo nginx supervisor libpq-dev
+    && apt-get -y install  postgresql-11 sudo nginx supervisor libpq-dev
 
 RUN update-alternatives --install /usr/bin/python python /usr/bin/python3 10
 RUN update-ca-certificates
