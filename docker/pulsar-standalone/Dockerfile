@@ -26,14 +26,49 @@ FROM apachepulsar/pulsar-dashboard:latest as dashboard
 # Restart from
 FROM openjdk:11-jdk
 
+# 更改国内源
+COPY ../auxiliary/sources-tuna-bullseye.list /etc/apt/sources.list
+RUN apt-get update && apt-get upgrade
+
+
+# 清华源安装https证书
+RUN apt install -y apt-transport-https ca-certificates
+
+
+# 编译python源码并安装
+# 安装python先决条件【需要安装gcc make】
+RUN apt-get install -y build-essential checkinstall
+RUN apt-get install -y libncursesw5-dev libssl-dev \
+    libsqlite3-dev tk-dev libgdbm-dev libc6-dev libbz2-dev libffi-dev zlib1g-dev gcc make
+RUN apt-get clean all \
+	&& mkdir /usr/local/python3
+
+# 将下载好的python源码包copy到指定目录
+COPY ../auxiliary/Python-3.7.8.tgz  /usr/local/python3/
+# 编译python
+RUN set -ex \
+	&& cd /usr/local/python3 \
+	&& tar -xvf  Python-3.7.8.tgz \
+	&& cd Python-3.7.8 \
+	&& ./configure prefix=/usr/local/python3 \
+	&& make && make install \
+	&& ln -s /usr/local/python3/bin/python3.7 /usr/local/bin/python3.7 \
+	&& ln -s /usr/local/python3/bin/pip3 /usr/local/bin/pip3.7 \
+    && ln -s /usr/local/python3/bin/python3.7 /usr/bin/python3.7 \
+    && ln -s /usr/local/python3/bin/pip3 /usr/bin/pip3.7
+RUN set -ex \
+	&& cd /usr/local/python3 \
+	&& python3.7 -V
+
+
 # Note that the libpq-dev package is needed here in order to install
 # the required python psycopg2 package (for postgresql) later
 RUN apt-get update \
-    && apt-get -y install python3.7 python3.7-dev python3-pip postgresql sudo nginx supervisor libpq-dev
+    && apt-get -y install  postgresql sudo nginx supervisor libpq-dev
 
 RUN update-alternatives --install /usr/bin/python python /usr/bin/python3 10
 RUN update-ca-certificates
-RUN ln -s /usr/bin/pip3 /usr/bin/pip
+RUN ln -s /usr/bin/pip3.7 /usr/bin/pip
 
 # Postgres configuration
 COPY --from=dashboard /etc/postgresql/11/main/postgresql.conf /etc/postgresql/11/main/postgresql.conf
