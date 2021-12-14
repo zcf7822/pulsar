@@ -46,7 +46,7 @@ FROM openjdk:11-jdk-slim
 #    && apt-key adv --keyserver keyserver.ubuntu.com --recv-keys  CBF8D6FD518E17E1
 
 # 更改国内源
-COPY ../auxiliary/sources-tuna-bullseye.list /etc/apt/sources.list
+COPY auxiliary/sources-tuna-bullseye.list /etc/apt/sources.list
 RUN apt-get update && apt-get upgrade
 
 # 清华源安装https证书
@@ -61,7 +61,7 @@ RUN apt-get clean all \
 	&& mkdir /usr/local/python3
 
 # 将下载好的python源码包copy到指定目录
-COPY ../auxiliary/Python-3.7.8.tgz  /usr/local/python3/
+COPY auxiliary/Python-3.7.8.tgz  /usr/local/python3/
 # 编译python
 RUN set -ex \
 	&& cd /usr/local/python3 \
