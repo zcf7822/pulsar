@@ -27,6 +27,7 @@ import org.apache.pulsar.client.api.Message;
 import org.apache.pulsar.client.api.MessageId;
 import org.apache.pulsar.client.api.PulsarClientException;
 import org.apache.pulsar.common.events.EventsTopicNames;
+import org.apache.pulsar.common.naming.NamespaceName;
 import org.apache.pulsar.common.naming.TopicName;
 
 /**
@@ -106,6 +107,25 @@ public interface SystemTopicClient<T> {
         CompletableFuture<MessageId> writeAsync(T t);
 
         /**
+         * Delete event in the system topic.
+         * @param t pulsar event
+         * @return message id
+         * @throws PulsarClientException exception while write event cause
+         */
+        default MessageId delete(T t) throws PulsarClientException {
+            throw new UnsupportedOperationException("Unsupported operation");
+        }
+
+        /**
+         * Async delete event in the system topic.
+         * @param t pulsar event
+         * @return message id future
+         */
+        default CompletableFuture<MessageId> deleteAsync(T t) {
+            throw new UnsupportedOperationException("Unsupported operation");
+        }
+
+        /**
          * Close the system topic writer.
          */
         void close() throws IOException;
@@ -170,6 +190,10 @@ public interface SystemTopicClient<T> {
     }
 
     static boolean isSystemTopic(TopicName topicName) {
+        if (topicName.getNamespaceObject().equals(NamespaceName.SYSTEM_NAMESPACE)) {
+            return true;
+        }
+
         TopicName nonePartitionedTopicName = TopicName.get(topicName.getPartitionedTopicName());
 
         // event topic

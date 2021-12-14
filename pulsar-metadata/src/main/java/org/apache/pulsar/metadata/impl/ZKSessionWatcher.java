@@ -18,6 +18,7 @@
  */
 package org.apache.pulsar.metadata.impl;
 
+import static org.apache.pulsar.common.util.Runnables.catchingAndLoggingThrowables;
 import io.netty.util.concurrent.DefaultThreadFactory;
 
 import java.util.concurrent.CompletableFuture;
@@ -67,8 +68,10 @@ public class ZKSessionWatcher implements AutoCloseable, Watcher {
 
         this.scheduler = Executors
                 .newSingleThreadScheduledExecutor(new DefaultThreadFactory("metadata-store-zk-session-watcher"));
-        this.task = scheduler.scheduleAtFixedRate(this::checkConnectionStatus, tickTimeMillis, tickTimeMillis,
-                TimeUnit.MILLISECONDS);
+        this.task =
+                scheduler.scheduleAtFixedRate(catchingAndLoggingThrowables(this::checkConnectionStatus), tickTimeMillis,
+                        tickTimeMillis,
+                        TimeUnit.MILLISECONDS);
         this.currentStatus = SessionEvent.SessionReestablished;
     }
 
@@ -119,6 +122,10 @@ public class ZKSessionWatcher implements AutoCloseable, Watcher {
     public synchronized void process(WatchedEvent event) {
         log.info("Got ZK session watch event: {}", event);
         checkState(event.getState());
+    }
+
+    synchronized void setSessionInvalid() {
+        currentStatus = SessionEvent.SessionLost;
     }
 
     private void checkState(Watcher.Event.KeeperState zkClientState) {

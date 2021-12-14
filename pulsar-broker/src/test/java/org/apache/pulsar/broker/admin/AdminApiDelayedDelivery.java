@@ -23,9 +23,7 @@ import lombok.Cleanup;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.pulsar.broker.auth.MockedPulsarServiceBaseTest;
 import org.apache.pulsar.client.api.*;
-import org.apache.pulsar.common.naming.TopicName;
 import org.apache.pulsar.common.policies.data.ClusterData;
-import org.apache.pulsar.common.policies.data.ClusterDataImpl;
 import org.apache.pulsar.common.policies.data.DelayedDeliveryPolicies;
 import org.apache.pulsar.common.policies.data.TenantInfoImpl;
 import org.awaitility.Awaitility;
@@ -150,8 +148,6 @@ public class AdminApiDelayedDelivery extends MockedPulsarServiceBaseTest {
         final String topic = "persistent://" + namespace + "/test" + UUID.randomUUID();
         admin.namespaces().createNamespace(namespace);
         pulsarClient.newProducer().topic(topic).create().close();
-        Awaitility.await()
-                .until(() -> pulsar.getTopicPoliciesService().cacheIsInitialized(TopicName.get(topic)));
         //namespace-level default value is null
         assertNull(admin.namespaces().getDelayedDelivery(namespace));
         //topic-level default value is null

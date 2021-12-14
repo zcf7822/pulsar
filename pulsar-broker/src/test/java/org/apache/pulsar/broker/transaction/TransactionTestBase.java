@@ -21,19 +21,17 @@ package org.apache.pulsar.broker.transaction;
 import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.doReturn;
 import static org.mockito.Mockito.spy;
-
+import com.google.common.collect.Sets;
 import com.google.common.util.concurrent.MoreExecutors;
-import com.google.common.util.concurrent.ThreadFactoryBuilder;
+import io.netty.channel.EventLoopGroup;
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 import java.util.function.Supplier;
-import io.netty.channel.EventLoopGroup;
 import lombok.Getter;
 import lombok.Setter;
 import lombok.extern.slf4j.Slf4j;
@@ -49,17 +47,23 @@ import org.apache.pulsar.broker.ServiceConfiguration;
 import org.apache.pulsar.broker.auth.SameThreadOrderedSafeExecutor;
 import org.apache.pulsar.broker.intercept.CounterBrokerInterceptor;
 import org.apache.pulsar.broker.namespace.NamespaceService;
+import org.apache.pulsar.common.naming.NamespaceName;
+import org.apache.pulsar.common.naming.TopicName;
+import org.apache.pulsar.common.policies.data.ClusterData;
+import org.apache.pulsar.common.policies.data.TenantInfoImpl;
 import org.apache.pulsar.client.admin.PulsarAdmin;
 import org.apache.pulsar.client.api.PulsarClient;
+import org.apache.pulsar.metadata.api.extended.MetadataStoreExtended;
 import org.apache.pulsar.metadata.impl.ZKMetadataStore;
 import org.apache.pulsar.tests.TestRetrySupport;
 import org.apache.pulsar.zookeeper.ZooKeeperClientFactory;
-import org.apache.pulsar.zookeeper.ZookeeperClientFactoryImpl;
-import org.apache.zookeeper.data.ACL;
 import org.apache.zookeeper.CreateMode;
+import org.apache.zookeeper.data.ACL;
 import org.apache.zookeeper.MockZooKeeper;
 import org.apache.zookeeper.MockZooKeeperSession;
 import org.apache.zookeeper.ZooKeeper;
+import org.awaitility.Awaitility;
+import org.testng.Assert;
 
 @Slf4j
 public abstract class TransactionTestBase extends TestRetrySupport {
@@ -73,7 +77,7 @@ public abstract class TransactionTestBase extends TestRetrySupport {
     @Getter
     private final List<ServiceConfiguration> serviceConfigurationList = new ArrayList<>();
     @Getter
-    private final List<PulsarService> pulsarServiceList = new ArrayList<>();
+    protected final List<PulsarService> pulsarServiceList = new ArrayList<>();
 
     protected PulsarAdmin admin;
     protected PulsarClient pulsarClient;
@@ -81,6 +85,9 @@ public abstract class TransactionTestBase extends TestRetrySupport {
     private MockZooKeeper mockZooKeeper;
     private OrderedExecutor bkExecutor;
     private NonClosableMockBookKeeper mockBookKeeper;
+
+    public static final String TENANT = "tnx";
+    protected static final String NAMESPACE1 = TENANT + "/ns1";
 
     public void internalSetup() throws Exception {
         incrementSetupNumber();
@@ -106,6 +113,40 @@ public abstract class TransactionTestBase extends TestRetrySupport {
                 .build();
         mockBookKeeper = createMockBookKeeper(bkExecutor);
         startBroker();
+    }
+    protected void setUpBase(int numBroker,int numPartitionsOfTC, String topic, int numPartitions) throws Exception{
+        setBrokerCount(numBroker);
+        internalSetup();
+
+        String[] brokerServiceUrlArr = getPulsarServiceList().get(0).getBrokerServiceUrl().split(":");
+        String webServicePort = brokerServiceUrlArr[brokerServiceUrlArr.length -1];
+        admin.clusters().createCluster(CLUSTER_NAME, ClusterData.builder().serviceUrl("http://localhost:"
+                + webServicePort).build());
+
+        admin.tenants().createTenant(NamespaceName.SYSTEM_NAMESPACE.getTenant(),
+                new TenantInfoImpl(Sets.newHashSet("appid1"), Sets.newHashSet(CLUSTER_NAME)));
+        admin.namespaces().createNamespace(NamespaceName.SYSTEM_NAMESPACE.toString());
+        admin.topics().createPartitionedTopic(TopicName.TRANSACTION_COORDINATOR_ASSIGN.toString(), numPartitionsOfTC);
+        if (topic != null) {
+            admin.tenants().createTenant(TENANT,
+                    new TenantInfoImpl(Sets.newHashSet("appid1"), Sets.newHashSet(CLUSTER_NAME)));
+            admin.namespaces().createNamespace(NAMESPACE1);
+            if (numPartitions == 0) {
+                admin.topics().createNonPartitionedTopic(topic);
+            } else {
+                admin.topics().createPartitionedTopic(topic, numPartitions);
+            }
+        }
+        if (pulsarClient != null) {
+            pulsarClient.shutdown();
+        }
+        pulsarClient = PulsarClient.builder()
+                .serviceUrl(getPulsarServiceList().get(0).getBrokerServiceUrl())
+                .statsInterval(0, TimeUnit.SECONDS)
+                .enableTransaction(true)
+                .build();
+        // wait tc init success to ready state
+        waitForCoordinatorToBeAvailable(numPartitionsOfTC);
     }
 
     protected void startBroker() throws Exception {
@@ -133,6 +174,7 @@ public abstract class TransactionTestBase extends TestRetrySupport {
             conf.setSystemTopicEnabled(true);
             conf.setTransactionBufferSnapshotMaxTransactionCount(2);
             conf.setTransactionBufferSnapshotMinTimeInMillis(2000);
+            conf.setTopicLevelPoliciesEnabled(true);
             serviceConfigurationList.add(conf);
 
             PulsarService pulsar = spy(new PulsarService(conf));
@@ -145,7 +187,6 @@ public abstract class TransactionTestBase extends TestRetrySupport {
 
     protected void setupBrokerMocks(PulsarService pulsar) throws Exception {
         // Override default providers with mocked ones
-        doReturn(mockZooKeeperClientFactory).when(pulsar).getZooKeeperClientFactory();
         doReturn(mockBookKeeperClientFactory).when(pulsar).newBookKeeperClientFactory();
 
         MockZooKeeperSession mockZooKeeperSession = MockZooKeeperSession.newInstance(mockZooKeeper);
@@ -167,9 +208,9 @@ public abstract class TransactionTestBase extends TestRetrySupport {
         List<ACL> dummyAclList = new ArrayList<>(0);
 
         ZkUtils.createFullPathOptimistic(zk, "/ledgers/available/192.168.1.1:" + 5000,
-                "".getBytes(ZookeeperClientFactoryImpl.ENCODING_SCHEME), dummyAclList, CreateMode.PERSISTENT);
+                "".getBytes(StandardCharsets.UTF_8), dummyAclList, CreateMode.PERSISTENT);
 
-        zk.create("/ledgers/LAYOUT", "1\nflat:1".getBytes(ZookeeperClientFactoryImpl.ENCODING_SCHEME), dummyAclList,
+        zk.create("/ledgers/LAYOUT", "1\nflat:1".getBytes(StandardCharsets.UTF_8), dummyAclList,
                 CreateMode.PERSISTENT);
         return zk;
     }
@@ -213,7 +254,8 @@ public abstract class TransactionTestBase extends TestRetrySupport {
     private final BookKeeperClientFactory mockBookKeeperClientFactory = new BookKeeperClientFactory() {
 
         @Override
-        public BookKeeper create(ServiceConfiguration conf, ZooKeeper zkClient, EventLoopGroup eventLoopGroup,
+        public BookKeeper create(ServiceConfiguration conf, MetadataStoreExtended store,
+                                 EventLoopGroup eventLoopGroup,
                                  Optional<Class<? extends EnsemblePlacementPolicy>> ensemblePlacementPolicyClass,
                                  Map<String, Object> properties) {
             // Always return the same instance (so that we don't loose the mock BK content on broker restart
@@ -221,7 +263,8 @@ public abstract class TransactionTestBase extends TestRetrySupport {
         }
 
         @Override
-        public BookKeeper create(ServiceConfiguration conf, ZooKeeper zkClient, EventLoopGroup eventLoopGroup,
+        public BookKeeper create(ServiceConfiguration conf, MetadataStoreExtended store,
+                                 EventLoopGroup eventLoopGroup,
                                  Optional<Class<? extends EnsemblePlacementPolicy>> ensemblePlacementPolicyClass,
                                  Map<String, Object> properties, StatsLogger statsLogger) {
             // Always return the same instance (so that we don't loose the mock BK content on broker restart
@@ -244,7 +287,7 @@ public abstract class TransactionTestBase extends TestRetrySupport {
                 admin = null;
             }
             if (pulsarClient != null) {
-                pulsarClient.shutdown();
+                pulsarClient.close();
                 pulsarClient = null;
             }
             if (pulsarServiceList.size() > 0) {
@@ -291,5 +334,14 @@ public abstract class TransactionTestBase extends TestRetrySupport {
             log.warn("Failed to clean up mocked pulsar service:", e);
         }
     }
-
+    public void waitForCoordinatorToBeAvailable(int numOfTCPerBroker){
+        // wait tc init success to ready state
+        Awaitility.await()
+                .untilAsserted(() -> {
+                    int transactionMetaStoreCount = pulsarServiceList.stream()
+                            .mapToInt(pulsarService -> pulsarService.getTransactionMetadataStoreService().getStores().size())
+                            .sum();
+                    Assert.assertEquals(transactionMetaStoreCount, numOfTCPerBroker);
+                });
+    }
 }

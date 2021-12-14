@@ -39,6 +39,7 @@ import java.io.IOException;
 import java.lang.reflect.Field;
 import java.lang.reflect.Type;
 import java.util.Arrays;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.LinkedList;
 import java.util.List;
@@ -50,7 +51,6 @@ import java.util.stream.Collectors;
 import lombok.Getter;
 import lombok.extern.slf4j.Slf4j;
 
-import org.apache.commons.lang.StringUtils;
 import org.apache.commons.lang3.text.WordUtils;
 import org.apache.pulsar.admin.cli.utils.CmdUtils;
 import org.apache.pulsar.client.admin.PulsarAdmin;
@@ -182,13 +182,27 @@ public class CmdSinks extends CmdBase {
         protected String metricsPortStart;
 
         private void mergeArgs() {
-            if (!StringUtils.isBlank(DEPRECATED_brokerServiceUrl)) brokerServiceUrl = DEPRECATED_brokerServiceUrl;
-            if (!StringUtils.isBlank(DEPRECATED_clientAuthPlugin)) clientAuthPlugin = DEPRECATED_clientAuthPlugin;
-            if (!StringUtils.isBlank(DEPRECATED_clientAuthParams)) clientAuthParams = DEPRECATED_clientAuthParams;
-            if (DEPRECATED_useTls != null) useTls = DEPRECATED_useTls;
-            if (DEPRECATED_tlsAllowInsecureConnection != null) tlsAllowInsecureConnection = DEPRECATED_tlsAllowInsecureConnection;
-            if (DEPRECATED_tlsHostNameVerificationEnabled != null) tlsHostNameVerificationEnabled = DEPRECATED_tlsHostNameVerificationEnabled;
-            if (!StringUtils.isBlank(DEPRECATED_tlsTrustCertFilePath)) tlsTrustCertFilePath = DEPRECATED_tlsTrustCertFilePath;
+            if (isBlank(brokerServiceUrl) && !isBlank(DEPRECATED_brokerServiceUrl)) {
+                brokerServiceUrl = DEPRECATED_brokerServiceUrl;
+            }
+            if (isBlank(clientAuthPlugin) && !isBlank(DEPRECATED_clientAuthPlugin)) {
+                clientAuthPlugin = DEPRECATED_clientAuthPlugin;
+            }
+            if (isBlank(clientAuthParams) && !isBlank(DEPRECATED_clientAuthParams)) {
+                clientAuthParams = DEPRECATED_clientAuthParams;
+            }
+            if (!useTls && DEPRECATED_useTls != null) {
+                useTls = DEPRECATED_useTls;
+            }
+            if (!tlsAllowInsecureConnection && DEPRECATED_tlsAllowInsecureConnection != null) {
+                tlsAllowInsecureConnection = DEPRECATED_tlsAllowInsecureConnection;
+            }
+            if (!tlsHostNameVerificationEnabled && DEPRECATED_tlsHostNameVerificationEnabled != null) {
+                tlsHostNameVerificationEnabled = DEPRECATED_tlsHostNameVerificationEnabled;
+            }
+            if (isBlank(tlsTrustCertFilePath) && !isBlank(DEPRECATED_tlsTrustCertFilePath)) {
+                tlsTrustCertFilePath = DEPRECATED_tlsTrustCertFilePath;
+            }
         }
 
         @Override
@@ -345,18 +359,36 @@ public class CmdSinks extends CmdBase {
         protected Long negativeAckRedeliveryDelayMs;
         @Parameter(names = "--custom-runtime-options", description = "A string that encodes options to customize the runtime, see docs for configured runtime for details")
         protected String customRuntimeOptions;
+        @Parameter(names = "--secrets", description = "The map of secretName to an object that encapsulates how the secret is fetched by the underlying secrets provider")
+        protected String secretsString;
 
         protected SinkConfig sinkConfig;
 
         private void mergeArgs() {
-            if (!StringUtils.isBlank(DEPRECATED_subsName)) subsName = DEPRECATED_subsName;
-            if (!StringUtils.isBlank(DEPRECATED_topicsPattern)) topicsPattern = DEPRECATED_topicsPattern;
-            if (!StringUtils.isBlank(DEPRECATED_customSerdeInputString)) customSerdeInputString = DEPRECATED_customSerdeInputString;
-            if (DEPRECATED_processingGuarantees != null) processingGuarantees = DEPRECATED_processingGuarantees;
-            if (DEPRECATED_retainOrdering != null) retainOrdering = DEPRECATED_retainOrdering;
-            if (!StringUtils.isBlank(DEPRECATED_className)) className = DEPRECATED_className;
-            if (!StringUtils.isBlank(DEPRECATED_sinkConfigFile)) sinkConfigFile = DEPRECATED_sinkConfigFile;
-            if (!StringUtils.isBlank(DEPRECATED_sinkConfigString)) sinkConfigString = DEPRECATED_sinkConfigString;
+            if (isBlank(subsName) && !isBlank(DEPRECATED_subsName)) {
+                subsName = DEPRECATED_subsName;
+            }
+            if (isBlank(topicsPattern) && !isBlank(DEPRECATED_topicsPattern)) {
+                topicsPattern = DEPRECATED_topicsPattern;
+            }
+            if (isBlank(customSerdeInputString) && !isBlank(DEPRECATED_customSerdeInputString)) {
+                customSerdeInputString = DEPRECATED_customSerdeInputString;
+            }
+            if (processingGuarantees == null && DEPRECATED_processingGuarantees != null) {
+                processingGuarantees = DEPRECATED_processingGuarantees;
+            }
+            if (retainOrdering == null && DEPRECATED_retainOrdering != null) {
+                retainOrdering = DEPRECATED_retainOrdering;
+            }
+            if (isBlank(className) && !isBlank(DEPRECATED_className)) {
+                className = DEPRECATED_className;
+            }
+            if (isBlank(sinkConfigFile) && !isBlank(DEPRECATED_sinkConfigFile)) {
+                sinkConfigFile = DEPRECATED_sinkConfigFile;
+            }
+            if (isBlank(sinkConfigString) && !isBlank(DEPRECATED_sinkConfigString)) {
+                sinkConfigString = DEPRECATED_sinkConfigString;
+            }
         }
 
         @Override
@@ -492,6 +524,15 @@ public class CmdSinks extends CmdBase {
 
             if (customRuntimeOptions != null) {
                 sinkConfig.setCustomRuntimeOptions(customRuntimeOptions);
+            }
+
+            if (secretsString != null) {
+                Type type = new TypeToken<Map<String, Object>>() {}.getType();
+                Map<String, Object> secretsMap = new Gson().fromJson(secretsString, type);
+                if (secretsMap == null) {
+                    secretsMap = Collections.emptyMap();
+                }
+                sinkConfig.setSecrets(secretsMap);
             }
 
             // check if configs are valid

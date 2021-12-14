@@ -34,7 +34,6 @@ import org.apache.pulsar.client.api.Producer;
 import org.apache.pulsar.client.api.PulsarClient;
 import org.apache.pulsar.client.api.PulsarClientException;
 import org.apache.pulsar.common.policies.data.ClusterData;
-import org.apache.pulsar.common.policies.data.ClusterDataImpl;
 import org.apache.pulsar.common.policies.data.TenantInfoImpl;
 import org.apache.pulsar.functions.worker.WorkerService;
 import org.apache.pulsar.zookeeper.LocalBookkeeperEnsemble;
@@ -129,7 +128,9 @@ public class LeaderElectionServiceTest {
                     .create();
         } catch (PulsarClientException t) {
             Assert.assertTrue(t instanceof PulsarClientException.LookupException);
-            Assert.assertEquals(t.getMessage(), "java.lang.IllegalStateException: The leader election has not yet been completed!");
+            Assert.assertTrue(
+                    t.getMessage().contains(
+                            "java.lang.IllegalStateException: The leader election has not yet been completed!"));
         }
     }
 

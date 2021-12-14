@@ -38,6 +38,7 @@ import java.io.File;
 import java.io.IOException;
 import java.lang.reflect.Field;
 import java.lang.reflect.Type;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.LinkedList;
 import java.util.List;
@@ -181,13 +182,27 @@ public class CmdSources extends CmdBase {
         protected String metricsPortStart;
 
         private void mergeArgs() {
-            if (!isBlank(DEPRECATED_brokerServiceUrl)) brokerServiceUrl = DEPRECATED_brokerServiceUrl;
-            if (!isBlank(DEPRECATED_clientAuthPlugin)) clientAuthPlugin = DEPRECATED_clientAuthPlugin;
-            if (!isBlank(DEPRECATED_clientAuthParams)) clientAuthParams = DEPRECATED_clientAuthParams;
-            if (DEPRECATED_useTls != null) useTls = DEPRECATED_useTls;
-            if (DEPRECATED_tlsAllowInsecureConnection != null) tlsAllowInsecureConnection = DEPRECATED_tlsAllowInsecureConnection;
-            if (DEPRECATED_tlsHostNameVerificationEnabled != null) tlsHostNameVerificationEnabled = DEPRECATED_tlsHostNameVerificationEnabled;
-            if (!isBlank(DEPRECATED_tlsTrustCertFilePath)) tlsTrustCertFilePath = DEPRECATED_tlsTrustCertFilePath;
+            if (isBlank(brokerServiceUrl) && !isBlank(DEPRECATED_brokerServiceUrl)) {
+                brokerServiceUrl = DEPRECATED_brokerServiceUrl;
+            }
+            if (isBlank(clientAuthPlugin) && !isBlank(DEPRECATED_clientAuthPlugin)) {
+                clientAuthPlugin = DEPRECATED_clientAuthPlugin;
+            }
+            if (isBlank(clientAuthParams) && !isBlank(DEPRECATED_clientAuthParams)) {
+                clientAuthParams = DEPRECATED_clientAuthParams;
+            }
+            if (!useTls && DEPRECATED_useTls != null) {
+                useTls = DEPRECATED_useTls;
+            }
+            if (!tlsAllowInsecureConnection && DEPRECATED_tlsAllowInsecureConnection != null) {
+                tlsAllowInsecureConnection = DEPRECATED_tlsAllowInsecureConnection;
+            }
+            if (!tlsHostNameVerificationEnabled && DEPRECATED_tlsHostNameVerificationEnabled != null) {
+                tlsHostNameVerificationEnabled = DEPRECATED_tlsHostNameVerificationEnabled;
+            }
+            if (isBlank(tlsTrustCertFilePath) && !isBlank(DEPRECATED_tlsTrustCertFilePath)) {
+                tlsTrustCertFilePath = DEPRECATED_tlsTrustCertFilePath;
+            }
         }
 
         @Override
@@ -325,16 +340,30 @@ public class CmdSources extends CmdBase {
         protected String batchSourceConfigString;
         @Parameter(names = "--custom-runtime-options", description = "A string that encodes options to customize the runtime, see docs for configured runtime for details")
         protected String customRuntimeOptions;
+        @Parameter(names = "--secrets", description = "The map of secretName to an object that encapsulates how the secret is fetched by the underlying secrets provider")
+        protected String secretsString;
 
         protected SourceConfig sourceConfig;
 
         private void mergeArgs() {
-            if (DEPRECATED_processingGuarantees != null) processingGuarantees = DEPRECATED_processingGuarantees;
-            if (!isBlank(DEPRECATED_destinationTopicName)) destinationTopicName = DEPRECATED_destinationTopicName;
-            if (!isBlank(DEPRECATED_deserializationClassName)) deserializationClassName = DEPRECATED_deserializationClassName;
-            if (!isBlank(DEPRECATED_className)) className = DEPRECATED_className;
-            if (!isBlank(DEPRECATED_sourceConfigFile)) sourceConfigFile = DEPRECATED_sourceConfigFile;
-            if (!isBlank(DEPRECATED_sourceConfigString)) sourceConfigString = DEPRECATED_sourceConfigString;
+            if (processingGuarantees == null && DEPRECATED_processingGuarantees != null) {
+                processingGuarantees = DEPRECATED_processingGuarantees;
+            }
+            if (isBlank(destinationTopicName) && !isBlank(DEPRECATED_destinationTopicName)) {
+                destinationTopicName = DEPRECATED_destinationTopicName;
+            }
+            if (isBlank(deserializationClassName) && !isBlank(DEPRECATED_deserializationClassName)) {
+                deserializationClassName = DEPRECATED_deserializationClassName;
+            }
+            if (isBlank(className) && !isBlank(DEPRECATED_className)) {
+                className = DEPRECATED_className;
+            }
+            if (isBlank(sourceConfigFile) && !isBlank(DEPRECATED_sourceConfigFile)) {
+                sourceConfigFile = DEPRECATED_sourceConfigFile;
+            }
+            if (isBlank(sourceConfigString) && !isBlank(DEPRECATED_sourceConfigString)) {
+                sourceConfigString = DEPRECATED_sourceConfigString;
+            }
         }
 
         @Override
@@ -437,6 +466,16 @@ public class CmdSources extends CmdBase {
             if (customRuntimeOptions != null) {
                 sourceConfig.setCustomRuntimeOptions(customRuntimeOptions);
             }
+
+            if (secretsString != null) {
+                Type type = new TypeToken<Map<String, Object>>() {}.getType();
+                Map<String, Object> secretsMap = new Gson().fromJson(secretsString, type);
+                if (secretsMap == null) {
+                    secretsMap = Collections.emptyMap();
+                }
+                sourceConfig.setSecrets(secretsMap);
+            }
+            
             // check if source configs are valid
             validateSourceConfigs(sourceConfig);
         }
@@ -477,25 +516,6 @@ public class CmdSources extends CmdBase {
            if (isBlank(batchSourceConfig.getDiscoveryTriggererClassName())) {
              throw new IllegalArgumentException("Discovery Triggerer not specified");
            } 
-           
-           boolean isBatchSourceTriggerer = false;
-           
-           try {
-             Class<?>[] interfaces = Class.forName(batchSourceConfig.getDiscoveryTriggererClassName()).getInterfaces();
-             int idx = 0;
-             
-             while (idx < interfaces.length && !isBatchSourceTriggerer) {
-            	 isBatchSourceTriggerer = interfaces[idx++].getName().equals("org.apache.pulsar.io.core.BatchSourceTriggerer");
-             }
-             
-             if (!isBatchSourceTriggerer) {
-            	 throw new IllegalArgumentException("Invalid Discovery Triggerer specified"); 
-             }
-             
-           } catch (ClassNotFoundException e) {
-             throw new IllegalArgumentException("Invalid Discovery Triggerer specified"); 
-           }
-           
         }
 
         protected String validateSourceType(String sourceType) throws IOException {
@@ -608,7 +628,7 @@ public class CmdSources extends CmdBase {
                 print(getAdmin().sources().getSourceStatus(tenant, namespace, sourceName));
             } else {
                 print(getAdmin().sources().getSourceStatus(tenant, namespace, sourceName, Integer.parseInt(instanceId)));
-            };
+            }
         }
     }
 

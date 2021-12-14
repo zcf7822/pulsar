@@ -129,7 +129,7 @@ public class LocalBookkeeperEnsemble {
                                    String bkDataDirName,
                                    boolean clearOldData,
                                    String advertisedAddress) {
-        this(numberOfBookies, zkPort, 4181, zkDataDirName, bkDataDirName, clearOldData, advertisedAddress,
+        this(numberOfBookies, zkPort, streamStoragePort, zkDataDirName, bkDataDirName, clearOldData, advertisedAddress,
                 new BasePortManager(bkBasePort));
     }
 
@@ -260,8 +260,8 @@ public class LocalBookkeeperEnsemble {
             if (zkc.exists("/ledgers/available/readonly", false) == null) {
                 zkc.create("/ledgers/available/readonly", new byte[0], Ids.OPEN_ACL_UNSAFE, CreateMode.PERSISTENT);
             }
-            if (zkc.exists(ZkBookieRackAffinityMapping.BOOKIE_INFO_ROOT_PATH, false) == null) {
-                zkc.create(ZkBookieRackAffinityMapping.BOOKIE_INFO_ROOT_PATH, "{}".getBytes(), Ids.OPEN_ACL_UNSAFE,
+            if (zkc.exists("/bookies", false) == null) {
+                zkc.create("/bookies", "{}".getBytes(), Ids.OPEN_ACL_UNSAFE,
                         CreateMode.PERSISTENT);
             }
 

@@ -83,13 +83,23 @@ public class CmdFunctionWorker extends CmdBase {
         }
     }
 
-    @Parameters(commandDescription = "Get the assignments of the functions accross the worker cluster")
+    @Parameters(commandDescription = "Get the assignments of the functions across the worker cluster")
     class GetFunctionAssignments extends BaseCommand {
 
 
         @Override
         void runCmd() throws Exception {
             print(getAdmin().worker().getAssignments());
+        }
+    }
+
+    @Parameters(commandDescription = "Triggers a rebalance of functions to workers")
+    class Rebalance extends BaseCommand {
+
+        @Override
+        void runCmd() throws Exception {
+            getAdmin().worker().rebalance();
+            print("Rebalance command sent successfully");
         }
     }
 
@@ -100,6 +110,7 @@ public class CmdFunctionWorker extends CmdBase {
         jcommander.addCommand("get-cluster", new GetCluster());
         jcommander.addCommand("get-cluster-leader", new GetClusterLeader());
         jcommander.addCommand("get-function-assignments", new GetFunctionAssignments());
+        jcommander.addCommand("rebalance", new Rebalance());
     }
 
 }

@@ -21,6 +21,7 @@ package org.apache.pulsar.common.naming;
 import static com.google.common.base.Preconditions.checkNotNull;
 import static org.apache.commons.lang3.StringUtils.isNotBlank;
 import static org.testng.Assert.assertEquals;
+import static org.testng.Assert.assertFalse;
 import static org.testng.Assert.assertTrue;
 import java.io.ByteArrayInputStream;
 import java.io.IOException;
@@ -30,6 +31,7 @@ import java.io.StringWriter;
 import java.nio.charset.StandardCharsets;
 import java.util.Optional;
 import java.util.Properties;
+import lombok.Cleanup;
 import org.apache.pulsar.broker.ServiceConfiguration;
 import org.apache.pulsar.common.configuration.PulsarConfigurationLoader;
 import org.apache.pulsar.common.policies.data.InactiveTopicDeleteMode;
@@ -49,9 +51,9 @@ public class ServiceConfigurationTest {
     public void testInit() throws Exception {
         final String zookeeperServer = "localhost:2184";
         final int brokerServicePort = 1000;
-        InputStream newStream = updateProp(zookeeperServer, String.valueOf(brokerServicePort), "ns1,ns2");
+        InputStream newStream = updateProp(zookeeperServer, String.valueOf(brokerServicePort), "ns1,ns2", 0.05);
         final ServiceConfiguration config = PulsarConfigurationLoader.create(newStream, ServiceConfiguration.class);
-        assertTrue(isNotBlank(config.getZookeeperServers()));
+        assertTrue(isNotBlank(config.getMetadataStoreUrl()));
         assertTrue(config.getBrokerServicePort().isPresent()
                 && config.getBrokerServicePort().get().equals(brokerServicePort));
         assertEquals(config.getBootstrapNamespaces().get(1), "ns2");
@@ -60,6 +62,7 @@ public class ServiceConfigurationTest {
         assertEquals(config.getSupportedNamespaceBundleSplitAlgorithms().size(), 1);
         assertEquals(config.getMaxMessagePublishBufferSizeInMB(), -1);
         assertEquals(config.getManagedLedgerDataReadPriority(), "bookkeeper-first");
+        assertEquals(config.getBacklogQuotaDefaultLimitGB(), 0.05);
     }
 
     @Test
@@ -78,6 +81,15 @@ public class ServiceConfigurationTest {
         assertEquals(config.getLoadBalancerOverrideBrokerNicSpeedGbps(), Optional.of(5.0));
     }
 
+    @Test
+    public void testServicePortsEmpty() throws Exception {
+        String confFile = "brokerServicePort=\nwebServicePort=\n";
+        InputStream stream = new ByteArrayInputStream(confFile.getBytes());
+        final ServiceConfiguration config = PulsarConfigurationLoader.create(stream, ServiceConfiguration.class);
+        assertEquals(config.getBrokerServicePort(), Optional.empty());
+        assertEquals(config.getWebServicePort(), Optional.empty());
+    }
+
     /**
      * test {@link ServiceConfiguration} with incorrect values.
      *
@@ -86,11 +98,11 @@ public class ServiceConfigurationTest {
     @Test(expectedExceptions = IllegalArgumentException.class)
     public void testInitFailure() throws Exception {
         final String zookeeperServer = "localhost:2184";
-        InputStream newStream = updateProp(zookeeperServer, "invalid-string", null);
+        InputStream newStream = updateProp(zookeeperServer, "invalid-string", null, 0.005);
         PulsarConfigurationLoader.create(newStream, ServiceConfiguration.class);
     }
 
-    private InputStream updateProp(String zookeeperServer, String brokerServicePort, String namespace)
+    private InputStream updateProp(String zookeeperServer, String brokerServicePort, String namespace, double backlogQuotaGB)
             throws IOException {
         checkNotNull(fileName);
         Properties properties = new Properties();
@@ -98,6 +110,7 @@ public class ServiceConfigurationTest {
         properties.load(stream);
         properties.setProperty("zookeeperServers", zookeeperServer);
         properties.setProperty("brokerServicePort", brokerServicePort);
+        properties.setProperty("backlogQuotaDefaultLimitGB", "" + backlogQuotaGB);
         if (namespace != null)
             properties.setProperty("bootstrapNamespaces", namespace);
         StringWriter writer = new StringWriter();
@@ -105,4 +118,96 @@ public class ServiceConfigurationTest {
         return new ByteArrayInputStream(writer.toString().getBytes(StandardCharsets.UTF_8));
     }
 
+    @Test
+    public void testZookeeperServers() throws Exception {
+        String confFile = "zookeeperServers=zk1:2181\n";
+        @Cleanup
+        InputStream stream = new ByteArrayInputStream(confFile.getBytes());
+        final ServiceConfiguration conf = PulsarConfigurationLoader.create(stream, ServiceConfiguration.class);
+
+        assertEquals(conf.getMetadataStoreUrl(), "zk1:2181");
+        assertEquals(conf.getConfigurationMetadataStoreUrl(), "zk1:2181");
+        assertEquals(conf.getBookkeeperMetadataStoreUrl(), "metadata-store:zk1:2181");
+        assertFalse(conf.isConfigurationStoreSeparated());
+        assertFalse(conf.isBookkeeperMetadataStoreSeparated());
+    }
+
+    @Test
+    public void testMetadataStoreUrl() throws Exception {
+        String confFile = "metadataStoreUrl=zk1:2181\n";
+        @Cleanup
+        InputStream stream = new ByteArrayInputStream(confFile.getBytes());
+        final ServiceConfiguration conf = PulsarConfigurationLoader.create(stream, ServiceConfiguration.class);
+
+        assertEquals(conf.getMetadataStoreUrl(), "zk1:2181");
+        assertEquals(conf.getConfigurationMetadataStoreUrl(), "zk1:2181");
+        assertEquals(conf.getBookkeeperMetadataStoreUrl(), "metadata-store:zk1:2181");
+        assertFalse(conf.isConfigurationStoreSeparated());
+        assertFalse(conf.isBookkeeperMetadataStoreSeparated());
+    }
+
+
+    @Test
+    public void testGlobalZookeeper() throws Exception {
+        String confFile = "metadataStoreUrl=zk1:2181\n" +
+                "globalZookeeperServers=zk2:2182\n"
+                ;
+        @Cleanup
+        InputStream stream = new ByteArrayInputStream(confFile.getBytes());
+        final ServiceConfiguration conf = PulsarConfigurationLoader.create(stream, ServiceConfiguration.class);
+
+        assertEquals(conf.getMetadataStoreUrl(), "zk1:2181");
+        assertEquals(conf.getConfigurationMetadataStoreUrl(), "zk2:2182");
+        assertEquals(conf.getBookkeeperMetadataStoreUrl(), "metadata-store:zk1:2181");
+        assertTrue(conf.isConfigurationStoreSeparated());
+        assertFalse(conf.isBookkeeperMetadataStoreSeparated());
+    }
+
+    @Test
+    public void testConfigurationStore() throws Exception {
+        String confFile = "metadataStoreUrl=zk1:2181\n" +
+                "configurationStoreServers=zk2:2182\n"
+                ;
+        @Cleanup
+        InputStream stream = new ByteArrayInputStream(confFile.getBytes());
+        final ServiceConfiguration conf = PulsarConfigurationLoader.create(stream, ServiceConfiguration.class);
+
+        assertEquals(conf.getMetadataStoreUrl(), "zk1:2181");
+        assertEquals(conf.getConfigurationMetadataStoreUrl(), "zk2:2182");
+        assertEquals(conf.getBookkeeperMetadataStoreUrl(), "metadata-store:zk1:2181");
+        assertTrue(conf.isConfigurationStoreSeparated());
+        assertFalse(conf.isBookkeeperMetadataStoreSeparated());
+    }
+
+    @Test
+    public void testConfigurationMetadataStoreUrl() throws Exception {
+        String confFile = "metadataStoreUrl=zk1:2181\n" +
+                "configurationMetadataStoreUrl=zk2:2182\n"
+                ;
+        @Cleanup
+        InputStream stream = new ByteArrayInputStream(confFile.getBytes());
+        final ServiceConfiguration conf = PulsarConfigurationLoader.create(stream, ServiceConfiguration.class);
+
+        assertEquals(conf.getMetadataStoreUrl(), "zk1:2181");
+        assertEquals(conf.getConfigurationMetadataStoreUrl(), "zk2:2182");
+        assertEquals(conf.getBookkeeperMetadataStoreUrl(), "metadata-store:zk1:2181");
+        assertTrue(conf.isConfigurationStoreSeparated());
+        assertFalse(conf.isBookkeeperMetadataStoreSeparated());
+    }
+
+    @Test
+    public void testBookkeeperMetadataStore() throws Exception {
+        String confFile = "metadataStoreUrl=zk1:2181\n" +
+                "configurationMetadataStoreUrl=zk2:2182\n" +
+                "bookkeeperMetadataServiceUri=xx:other-system\n";
+        @Cleanup
+        InputStream stream = new ByteArrayInputStream(confFile.getBytes());
+        final ServiceConfiguration conf = PulsarConfigurationLoader.create(stream, ServiceConfiguration.class);
+
+        assertEquals(conf.getMetadataStoreUrl(), "zk1:2181");
+        assertEquals(conf.getConfigurationMetadataStoreUrl(), "zk2:2182");
+        assertEquals(conf.getBookkeeperMetadataStoreUrl(), "xx:other-system");
+        assertTrue(conf.isConfigurationStoreSeparated());
+        assertTrue(conf.isBookkeeperMetadataStoreSeparated());
+    }
 }

@@ -20,6 +20,7 @@ package org.apache.pulsar.compaction;
 
 import com.github.benmanes.caffeine.cache.AsyncLoadingCache;
 import com.github.benmanes.caffeine.cache.Caffeine;
+import com.google.common.annotations.VisibleForTesting;
 import com.google.common.collect.ComparisonChain;
 import io.netty.buffer.ByteBuf;
 import java.util.ArrayList;
@@ -30,7 +31,6 @@ import java.util.NoSuchElementException;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutionException;
-import lombok.Getter;
 import org.apache.bookkeeper.client.BKException;
 import org.apache.bookkeeper.client.BookKeeper;
 import org.apache.bookkeeper.client.LedgerEntry;
@@ -65,7 +65,7 @@ public class CompactedTopicImpl implements CompactedTopic {
     }
 
     @Override
-    public CompletableFuture<?> newCompactedLedger(Position p, long compactedLedgerId) {
+    public CompletableFuture<CompactedTopicContext> newCompactedLedger(Position p, long compactedLedgerId) {
         synchronized (this) {
             compactionHorizon = (PositionImpl) p;
 
@@ -73,13 +73,14 @@ public class CompactedTopicImpl implements CompactedTopic {
             compactedTopicContext = openCompactedLedger(bk, compactedLedgerId);
 
             // delete the ledger from the old context once the new one is open
-            if (previousContext != null) {
-                return compactedTopicContext.thenCompose((res) -> previousContext)
-                    .thenCompose((res) -> tryDeleteCompactedLedger(bk, res.ledger.getId()));
-            } else {
-                return compactedTopicContext;
-            }
+            return compactedTopicContext.thenCompose(__ ->
+                    previousContext != null ? previousContext : CompletableFuture.completedFuture(null));
         }
+    }
+
+    @Override
+    public CompletableFuture<Void> deleteCompactedLedger(long compactedLedgerId) {
+        return tryDeleteCompactedLedger(bk, compactedLedgerId);
     }
 
     @Override
@@ -123,7 +124,12 @@ public class CompactedTopicImpl implements CompactedTopic {
                                 return readEntries(context.ledger, startPoint, endPoint)
                                     .thenAccept((entries) -> {
                                         Entry lastEntry = entries.get(entries.size() - 1);
-                                        cursor.seek(lastEntry.getPosition().getNext());
+                                        // The compaction task depends on the last snapshot and the incremental
+                                        // entries to build the new snapshot. So for the compaction cursor, we
+                                        // need to force seek the read position to ensure the compactor can read
+                                        // the complete last snapshot because of the compactor will read the data
+                                        // before the compaction cursor mark delete position
+                                        cursor.seek(lastEntry.getPosition().getNext(), true);
                                         callback.readEntriesComplete(entries, consumer);
                                     });
                             }
@@ -274,17 +280,6 @@ public class CompactedTopicImpl implements CompactedTopic {
                 });
     }
 
-    @Getter
-    public static class CompactedTopicContext {
-        final LedgerHandle ledger;
-        final AsyncLoadingCache<Long, MessageIdData> cache;
-
-        CompactedTopicContext(LedgerHandle ledger, AsyncLoadingCache<Long, MessageIdData> cache) {
-            this.ledger = ledger;
-            this.cache = cache;
-        }
-    }
-
     /**
      * Getter for CompactedTopicContext.
      * @return CompactedTopicContext
@@ -293,10 +288,27 @@ public class CompactedTopicImpl implements CompactedTopic {
         return compactedTopicContext == null ? Optional.empty() : Optional.of(compactedTopicContext.get());
     }
 
+    @Override
+    public CompletableFuture<Entry> readLastEntryOfCompactedLedger() {
+        if (compactionHorizon == null) {
+            return CompletableFuture.completedFuture(null);
+        }
+        return compactedTopicContext.thenCompose(context ->
+                readEntries(context.ledger, context.ledger.getLastAddConfirmed(), context.ledger.getLastAddConfirmed())
+                        .thenCompose(entries -> entries.size() > 0
+                                ? CompletableFuture.completedFuture(entries.get(0))
+                                : CompletableFuture.completedFuture(null)));
+    }
+
     private static int comparePositionAndMessageId(PositionImpl p, MessageIdData m) {
         return ComparisonChain.start()
             .compare(p.getLedgerId(), m.getLedgerId())
             .compare(p.getEntryId(), m.getEntryId()).result();
+    }
+
+    @VisibleForTesting
+    PositionImpl getCompactionHorizon() {
+        return this.compactionHorizon;
     }
     private static final Logger log = LoggerFactory.getLogger(CompactedTopicImpl.class);
 }

@@ -49,7 +49,11 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
+import java.util.concurrent.Semaphore;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.concurrent.atomic.LongAdder;
 
 import org.HdrHistogram.Histogram;
@@ -70,7 +74,9 @@ import org.apache.pulsar.client.api.TypedMessageBuilder;
 import static org.apache.pulsar.client.impl.conf.ProducerConfigurationData.DEFAULT_MAX_PENDING_MESSAGES;
 import static org.apache.pulsar.client.impl.conf.ProducerConfigurationData.DEFAULT_MAX_PENDING_MESSAGES_ACROSS_PARTITIONS;
 import static org.apache.pulsar.client.impl.conf.ProducerConfigurationData.DEFAULT_BATCHING_MAX_MESSAGES;
+import static org.apache.pulsar.testclient.utils.PerformanceUtils.buildTransaction;
 
+import org.apache.pulsar.client.api.transaction.Transaction;
 import org.apache.pulsar.common.partition.PartitionedTopicMetadata;
 import org.apache.pulsar.testclient.utils.PaddingDecimalFormat;
 import org.slf4j.Logger;
@@ -88,11 +94,18 @@ public class PerformanceProducer {
     private static final LongAdder messagesFailed = new LongAdder();
     private static final LongAdder bytesSent = new LongAdder();
 
+    private static final LongAdder totalNumTxnOpenTxnFail = new LongAdder();
+    private static final LongAdder totalNumTxnOpenTxnSuccess = new LongAdder();
+
     private static final LongAdder totalMessagesSent = new LongAdder();
     private static final LongAdder totalBytesSent = new LongAdder();
 
-    private static Recorder recorder = new Recorder(TimeUnit.SECONDS.toMicros(120000), 5);
-    private static Recorder cumulativeRecorder = new Recorder(TimeUnit.SECONDS.toMicros(120000), 5);
+    private static final Recorder recorder = new Recorder(TimeUnit.SECONDS.toMicros(120000), 5);
+    private static final Recorder cumulativeRecorder = new Recorder(TimeUnit.SECONDS.toMicros(120000), 5);
+
+    private static final LongAdder totalEndTxnOpSuccessNum = new LongAdder();
+    private static final LongAdder totalEndTxnOpFailNum = new LongAdder();
+    private static final LongAdder numTxnOpSuccess = new LongAdder();
 
     private static IMessageFormatter messageFormatter = null;
 
@@ -108,7 +121,7 @@ public class PerformanceProducer {
         @Parameter(description = "persistent://prop/ns/my-topic", required = true)
         public List<String> topics;
 
-        @Parameter(names = { "-threads", "--num-test-threads" }, description = "Number of test threads")
+        @Parameter(names = { "-threads", "--num-test-threads" }, description = "Number of test threads", validateWith = PositiveNumberParameterValidator.class)
         public int numTestThreads = 1;
 
         @Parameter(names = { "-r", "--rate" }, description = "Publish rate msg/s across topics")
@@ -117,10 +130,10 @@ public class PerformanceProducer {
         @Parameter(names = { "-s", "--size" }, description = "Message size (bytes)")
         public int msgSize = 1024;
 
-        @Parameter(names = { "-t", "--num-topic" }, description = "Number of topics")
+        @Parameter(names = { "-t", "--num-topic" }, description = "Number of topics", validateWith = PositiveNumberParameterValidator.class)
         public int numTopics = 1;
 
-        @Parameter(names = { "-n", "--num-producers" }, description = "Number of producers (per topic)")
+        @Parameter(names = { "-n", "--num-producers" }, description = "Number of producers (per topic)", validateWith = PositiveNumberParameterValidator.class)
         public int numProducers = 1;
 
         @Parameter(names = {"--separator"}, description = "Separator between the topic and topic number")
@@ -138,7 +151,10 @@ public class PerformanceProducer {
         @Parameter(names = { "-au", "--admin-url" }, description = "Pulsar Admin URL")
         public String adminURL;
 
-        @Parameter(names = { "--auth_plugin" }, description = "Authentication plugin class name")
+        @Parameter(names = { "--auth_plugin" }, description = "Authentication plugin class name", hidden = true)
+        public String deprecatedAuthPluginClassName;
+
+        @Parameter(names = { "--auth-plugin" }, description = "Authentication plugin class name")
         public String authPluginClassName;
 
         @Parameter(names = { "--listener-name" }, description = "Listener name for the broker.")
@@ -169,7 +185,7 @@ public class PerformanceProducer {
         public int maxConnections = 100;
 
         @Parameter(names = { "-m",
-                "--num-messages" }, description = "Number of messages to publish in total. If 0, it will keep publishing")
+                "--num-messages" }, description = "Number of messages to publish in total. If <= 0, it will keep publishing")
         public long numMessages = 0;
 
         @Parameter(names = { "-i",
@@ -201,7 +217,7 @@ public class PerformanceProducer {
         public int batchMaxBytes = 4 * 1024 * 1024;
 
         @Parameter(names = { "-time",
-                "--test-duration" }, description = "Test duration in secs. If 0, it will keep publishing")
+                "--test-duration" }, description = "Test duration in secs. If <= 0, it will keep publishing")
         public long testTime = 0;
 
         @Parameter(names = "--warmup-time", description = "Warm-up time in seconds (Default: 1 sec)")
@@ -235,7 +251,7 @@ public class PerformanceProducer {
         public String messageKeyGenerationMode = null;
 
         @Parameter(names = {"-ioThreads", "--num-io-threads"}, description = "Set the number of threads to be " +
-                "used for handling connections to brokers, default is 1 thread")
+                "used for handling connections to brokers. The default value is 1.")
         public int ioThreads = 1;
 
         @Parameter(names = {"-bw", "--busy-wait"}, description = "Enable Busy-Wait on the Pulsar client")
@@ -250,6 +266,25 @@ public class PerformanceProducer {
 
         @Parameter(names = {"-fc", "--format-class"}, description="Custom Formatter class name")
         public String formatterClass = "org.apache.pulsar.testclient.DefaultMessageFormatter";
+
+        @Parameter(names = {"-tto", "--txn-timeout"}, description = "Set the time value of transaction timeout,"
+                + " and the time unit is second. (After --txn-enable setting to true, --txn-timeout takes effect)")
+        public long transactionTimeout = 10;
+
+        @Parameter(names = {"-nmt", "--numMessage-perTransaction"},
+                description = "The number of messages sent by a transaction. "
+                        + "(After --txn-enable setting to true, -nmt takes effect)")
+        public int numMessagesPerTransaction = 50;
+
+        @Parameter(names = {"-txn", "--txn-enable"}, description = "Enable or disable the transaction")
+        public boolean isEnableTransaction = false;
+
+        @Parameter(names = {"-abort"}, description = "Abort the transaction. (After --txn-enable "
+                + "setting to true, -abort takes effect)")
+        public boolean isAbortTransaction = false;
+
+        @Parameter(names = { "--histogram-file" }, description = "HdrHistogram output file")
+        public String histogramFile = null;
     }
 
     public static void main(String[] args) throws Exception {
@@ -269,6 +304,10 @@ public class PerformanceProducer {
         if (arguments.help) {
             jc.usage();
             PerfClientUtils.exit(-1);
+        }
+
+        if (isBlank(arguments.authPluginClassName) && !isBlank(arguments.deprecatedAuthPluginClassName)) {
+            arguments.authPluginClassName = arguments.deprecatedAuthPluginClassName;
         }
 
         if (arguments.topics != null && arguments.topics.size() != arguments.numTopics) {
@@ -366,7 +405,7 @@ public class PerformanceProducer {
         long start = System.nanoTime();
 
         Runtime.getRuntime().addShutdownHook(new Thread(() -> {
-            printAggregatedThroughput(start);
+            printAggregatedThroughput(start, arguments);
             printAggregatedStats();
         }));
 
@@ -429,16 +468,19 @@ public class PerformanceProducer {
         long oldTime = System.nanoTime();
 
         Histogram reportHistogram = null;
+        HistogramLogWriter histogramLogWriter = null;
 
-        String statsFileName = "perf-producer-" + System.currentTimeMillis() + ".hgrm";
-        log.info("Dumping latency stats to {}", statsFileName);
+        if (arguments.histogramFile != null) {
+            String statsFileName = arguments.histogramFile;
+            log.info("Dumping latency stats to {}", statsFileName);
 
-        PrintStream histogramLog = new PrintStream(new FileOutputStream(statsFileName), false);
-        HistogramLogWriter histogramLogWriter = new HistogramLogWriter(histogramLog);
+            PrintStream histogramLog = new PrintStream(new FileOutputStream(statsFileName), false);
+            histogramLogWriter = new HistogramLogWriter(histogramLog);
 
-        // Some log header bits
-        histogramLogWriter.outputLogFormatVersion();
-        histogramLogWriter.outputLegend();
+            // Some log header bits
+            histogramLogWriter.outputLogFormatVersion();
+            histogramLogWriter.outputLegend();
+        }
 
         while (true) {
             try {
@@ -454,14 +496,27 @@ public class PerformanceProducer {
             long now = System.nanoTime();
             double elapsed = (now - oldTime) / 1e9;
             long total = totalMessagesSent.sum();
+            long totalTxnOpSuccess = 0;
+            long totalTxnOpFail = 0;
+            double rateOpenTxn = 0;
             double rate = messagesSent.sumThenReset() / elapsed;
             double failureRate = messagesFailed.sumThenReset() / elapsed;
             double throughput = bytesSent.sumThenReset() / elapsed / 1024 / 1024 * 8;
 
             reportHistogram = recorder.getIntervalHistogram(reportHistogram);
 
+            if (arguments.isEnableTransaction) {
+                totalTxnOpSuccess = totalEndTxnOpSuccessNum.sum();
+                totalTxnOpFail = totalEndTxnOpFailNum.sum();
+                rateOpenTxn = numTxnOpSuccess.sumThenReset() / elapsed;
+                log.info("--- Transaction : {} transaction end successfully --- {} transaction end failed "
+                                + "--- {} Txn/s",
+                        totalTxnOpSuccess, totalTxnOpFail, totalFormat.format(rateOpenTxn));
+            }
             log.info(
-                    "Throughput produced: {} msg --- {} msg/s --- {} Mbit/s --- failure {} msg/s --- Latency: mean: {} ms - med: {} - 95pct: {} - 99pct: {} - 99.9pct: {} - 99.99pct: {} - Max: {}",
+                    "Throughput produced: {} msg --- {} msg/s --- {} Mbit/s  --- failure {} msg/s "
+                            + "--- Latency: mean: "
+                            + "{} ms - med: {} - 95pct: {} - 99pct: {} - 99.9pct: {} - 99.99pct: {} - Max: {}",
                     intFormat.format(total),
                     throughputFormat.format(rate), throughputFormat.format(throughput),
                     throughputFormat.format(failureRate),
@@ -473,7 +528,10 @@ public class PerformanceProducer {
                     dec.format(reportHistogram.getValueAtPercentile(99.99) / 1000.0),
                     dec.format(reportHistogram.getMaxValue() / 1000.0));
 
-            histogramLogWriter.outputIntervalHistogram(reportHistogram);
+            if (histogramLogWriter != null) {
+                histogramLogWriter.outputIntervalHistogram(reportHistogram);
+            }
+
             reportHistogram.reset();
 
             oldTime = now;
@@ -484,7 +542,7 @@ public class PerformanceProducer {
         try {
             ClassLoader classLoader = PerformanceProducer.class.getClassLoader();
             Class clz = classLoader.loadClass(formatterClass);
-            return (IMessageFormatter) clz.newInstance();
+            return (IMessageFormatter) clz.getDeclaredConstructor().newInstance();
         } catch (Exception e) {
             return null;
         }
@@ -504,6 +562,7 @@ public class PerformanceProducer {
             List<Future<Producer<byte[]>>> futures = Lists.newArrayList();
 
             ClientBuilder clientBuilder = PulsarClient.builder() //
+                    .enableTransaction(arguments.isEnableTransaction)//
                     .serviceUrl(arguments.serviceURL) //
                     .connectionsPerBroker(arguments.maxConnections) //
                     .ioThreads(arguments.ioThreads) //
@@ -533,12 +592,15 @@ public class PerformanceProducer {
                     // enable round robin message routing if it is a partitioned topic
                     .messageRoutingMode(MessageRoutingMode.RoundRobinPartition);
 
+            if (arguments.isEnableTransaction) {
+                producerBuilder.sendTimeout(0, TimeUnit.SECONDS);
+            }
             if (arguments.producerName != null) {
                 String producerName = String.format("%s%s%d", arguments.producerName, arguments.separator, producerId);
                 producerBuilder.producerName(producerName);
             }
 
-            if (arguments.batchTimeMillis == 0.0 && arguments.batchMaxMessages == 0) {
+            if (arguments.batchTimeMillis <= 0.0 && arguments.batchMaxMessages <= 0) {
                 producerBuilder.enableBatching(false);
             } else {
                 long batchTimeUsec = (long) (arguments.batchTimeMillis * 1000);
@@ -597,11 +659,15 @@ public class PerformanceProducer {
             }
             // Send messages on all topics/producers
             long totalSent = 0;
+            AtomicReference<Transaction> transactionAtomicReference = buildTransaction(client,
+                    arguments.isEnableTransaction, arguments.transactionTimeout);
+            AtomicLong numMessageSend = new AtomicLong(0);
+            Semaphore numMsgPerTxnLimit = new Semaphore(arguments.numMessagesPerTransaction);
             while (true) {
                 for (Producer<byte[]> producer : producers) {
                     if (arguments.testTime > 0) {
                         if (System.nanoTime() > testEndTime) {
-                            log.info("------------------- DONE -----------------------");
+                            log.info("------------- DONE (reached the maximum duration: [{} seconds] of production) --------------", arguments.testTime);
                             printAggregatedStats();
                             doneLatch.countDown();
                             Thread.sleep(5000);
@@ -611,7 +677,7 @@ public class PerformanceProducer {
 
                     if (numMessages > 0) {
                         if (totalSent++ >= numMessages) {
-                            log.info("------------------- DONE -----------------------");
+                            log.info("------------- DONE (reached the maximum number: {} of production) --------------", numMessages);
                             printAggregatedStats();
                             doneLatch.countDown();
                             Thread.sleep(5000);
@@ -619,7 +685,8 @@ public class PerformanceProducer {
                         }
                     }
                     rateLimiter.acquire();
-
+                    //if transaction is disable, transaction will be null.
+                    Transaction transaction = transactionAtomicReference.get();
                     final long sendTime = System.nanoTime();
 
                     byte[] payloadData;
@@ -634,10 +701,22 @@ public class PerformanceProducer {
                     } else {
                         payloadData = payloadBytes;
                     }
-
-                    TypedMessageBuilder<byte[]> messageBuilder = producer.newMessage()
-                            .value(payloadData);
-                    if (arguments.delay >0) {
+                    TypedMessageBuilder<byte[]> messageBuilder;
+                    if (arguments.isEnableTransaction) {
+                        if (arguments.numMessagesPerTransaction> 0) {
+                            try{
+                                numMsgPerTxnLimit.acquire();
+                            }catch (InterruptedException exception){
+                                log.error("Get exception: ", exception);
+                            }
+                        }
+                        messageBuilder = producer.newMessage(transaction)
+                                .value(payloadData);
+                    } else {
+                        messageBuilder = producer.newMessage()
+                                .value(payloadData);
+                    }
+                    if (arguments.delay > 0) {
                         messageBuilder.deliverAfter(arguments.delay, TimeUnit.SECONDS);
                     }
                     //generate msg key
@@ -646,9 +725,10 @@ public class PerformanceProducer {
                     } else if (msgKeyMode == MessageKeyGenerationMode.autoIncrement) {
                         messageBuilder.key(String.valueOf(totalSent));
                     }
+                    PulsarClient pulsarClient = client;
                     messageBuilder.sendAsync().thenRun(() -> {
-                        messagesSent.increment();
                         bytesSent.add(payloadData.length);
+                        messagesSent.increment();
 
                         totalMessagesSent.increment();
                         totalBytesSent.add(payloadData.length);
@@ -665,13 +745,58 @@ public class PerformanceProducer {
                         if (ex.getCause() instanceof ArrayIndexOutOfBoundsException) {
                             return null;
                         }
-                        log.warn("Write error on message", ex);
+                        log.warn("Write message error with exception", ex);
                         messagesFailed.increment();
                         if (arguments.exitOnFailure) {
                             PerfClientUtils.exit(-1);
                         }
                         return null;
                     });
+                    if (arguments.isEnableTransaction
+                            && numMessageSend.incrementAndGet() == arguments.numMessagesPerTransaction) {
+                        if (!arguments.isAbortTransaction) {
+                            transaction.commit()
+                                    .thenRun(() -> {
+                                        log.info("Committed transaction {}",
+                                                transaction.getTxnID().toString());
+                                        totalEndTxnOpSuccessNum.increment();
+                                        numTxnOpSuccess.increment();
+                                    })
+                                    .exceptionally(exception -> {
+                                        log.error("Commit transaction failed with exception : ",
+                                                exception);
+                                        totalEndTxnOpFailNum.increment();
+                                        return null;
+                                    });
+                        } else {
+                            transaction.abort().thenRun(() -> {
+                                log.info("Abort transaction {}", transaction.getTxnID().toString());
+                                totalEndTxnOpSuccessNum.increment();
+                                numTxnOpSuccess.increment();
+                            }).exceptionally(exception -> {
+                                log.error("Commit transaction {} failed with exception",
+                                        transaction.getTxnID().toString(),
+                                        exception);
+                                totalEndTxnOpFailNum.increment();
+                                return null;
+                            });
+                        }
+                        while(true) {
+                            try {
+                                Transaction newTransaction = pulsarClient.newTransaction()
+                                        .withTransactionTimeout(arguments.transactionTimeout,
+                                                TimeUnit.SECONDS).build().get();
+                                transactionAtomicReference.compareAndSet(transaction, newTransaction);
+                                numMessageSend.set(0);
+                                numMsgPerTxnLimit.release(arguments.numMessagesPerTransaction);
+                                totalNumTxnOpenTxnSuccess.increment();
+                                break;
+                            }catch (Exception e){
+                                totalNumTxnOpenTxnFail.increment();
+                                log.error("Failed to new transaction with exception: ", e);
+                            }
+                        }
+                    }
                 }
             }
         } catch (Throwable t) {
@@ -680,6 +805,7 @@ public class PerformanceProducer {
             if (null != client) {
                 try {
                     client.close();
+                    PerfClientUtils.exit(-1);
                 } catch (PulsarClientException e) {
                     log.error("Failed to close test client", e);
                 }
@@ -687,13 +813,34 @@ public class PerformanceProducer {
         }
     }
 
-    private static void printAggregatedThroughput(long start) {
+    private static void printAggregatedThroughput(long start, Arguments arguments) {
         double elapsed = (System.nanoTime() - start) / 1e9;
         double rate = totalMessagesSent.sum() / elapsed;
         double throughput = totalBytesSent.sum() / elapsed / 1024 / 1024 * 8;
+        long totalTxnSuccess = 0;
+        long totalTxnFail = 0;
+        double rateOpenTxn = 0;
+        long numTransactionOpenFailed = 0;
+        long numTransactionOpenSuccess = 0;
+
+        if (arguments.isEnableTransaction) {
+            totalTxnSuccess = totalEndTxnOpSuccessNum.sum();
+            totalTxnFail = totalEndTxnOpFailNum.sum();
+            rateOpenTxn = elapsed / (totalTxnFail + totalTxnSuccess);
+            numTransactionOpenFailed = totalNumTxnOpenTxnFail.sum();
+            numTransactionOpenSuccess = totalNumTxnOpenTxnSuccess.sum();
+            log.info("--- Transaction : {} transaction end successfully --- {} transaction end failed "
+                            + "--- {} transaction open successfully --- {} transaction open failed "
+                            + "--- {} Txn/s",
+                    totalTxnSuccess,
+                    totalTxnFail,
+                    numTransactionOpenSuccess,
+                    numTransactionOpenFailed,
+                    totalFormat.format(rateOpenTxn));
+        }
         log.info(
-            "Aggregated throughput stats --- {} records sent --- {} msg/s --- {} Mbit/s",
-            totalMessagesSent,
+            "Aggregated throughput stats --- {} records sent --- {} msg/s --- {} Mbit/s ",
+            totalMessagesSent.sum(),
             totalFormat.format(rate),
             totalFormat.format(throughput));
     }

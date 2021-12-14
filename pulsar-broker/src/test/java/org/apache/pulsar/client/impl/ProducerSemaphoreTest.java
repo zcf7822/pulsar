@@ -36,9 +36,6 @@ import java.util.List;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutionException;
 
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-
 @Test(groups = "broker-impl")
 public class ProducerSemaphoreTest extends ProducerConsumerBase {
 
@@ -88,7 +85,7 @@ public class ProducerSemaphoreTest extends ProducerConsumerBase {
             for (int i = 0; i < messages / 2; i++) {
                 MessageMetadata metadata = new MessageMetadata()
                         .setNumMessagesInBatch(10);
-                MessageImpl<byte[]> msg = MessageImpl.create(metadata, ByteBuffer.wrap(new byte[0]), Schema.BYTES);
+                MessageImpl<byte[]> msg = MessageImpl.create(metadata, ByteBuffer.wrap(new byte[0]), Schema.BYTES, null);
                 futures.add(producer.sendAsync(msg));
             }
             Assert.assertEquals(producer.getSemaphore().get().availablePermits(), pendingQueueSize - messages/2);
@@ -147,7 +144,7 @@ public class ProducerSemaphoreTest extends ProducerConsumerBase {
                 MessageMetadata metadata = new MessageMetadata()
                         .setNumMessagesInBatch(10);
 
-                MessageImpl<byte[]> msg = MessageImpl.create(metadata, ByteBuffer.wrap(new byte[0]), Schema.BYTES);
+                MessageImpl<byte[]> msg = MessageImpl.create(metadata, ByteBuffer.wrap(new byte[0]), Schema.BYTES, null);
                 futures.add(producer.sendAsync(msg));
             }
             Assert.assertEquals(producer.getSemaphore().get().availablePermits(), 0);
@@ -155,7 +152,7 @@ public class ProducerSemaphoreTest extends ProducerConsumerBase {
                 MessageMetadata metadata = new MessageMetadata()
                         .setNumMessagesInBatch(10);
 
-                MessageImpl<byte[]> msg = MessageImpl.create(metadata, ByteBuffer.wrap(new byte[0]), Schema.BYTES);
+                MessageImpl<byte[]> msg = MessageImpl.create(metadata, ByteBuffer.wrap(new byte[0]), Schema.BYTES, null);
                 producer.sendAsync(msg).get();
                 Assert.fail("Shouldn't be able to send message");
             } catch (ExecutionException ee) {

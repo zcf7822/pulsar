@@ -16,8 +16,8 @@
  * specific language governing permissions and limitations
  * under the License.
  */
+#include <glib.h>
 #include <config.h>
-#include "moduleinfo.h"
 #include <epan/expert.h>
 #include <epan/packet.h>
 #include <epan/prefs.h>
@@ -26,10 +26,15 @@
 #include <epan/dissectors/packet-tcp.h>
 #include <epan/value_string.h>
 #include <wsutil/nstime.h>
-#include <glib.h>
-#include <gmodule.h>
 
 #include "PulsarApi.pb.h"
+
+#ifdef VERSION
+#undef VERSION
+#endif
+
+/* Version number of package */
+#define VERSION "0.0.1"
 
 const static int PULSAR_PORT = 6650;
 
@@ -209,7 +214,7 @@ static void dissect_message_metadata(proto_tree* frame_tree, tvbuff_t *tvb, int 
     proto_item* md_tree = proto_tree_add_subtree_format(frame_tree, tvb, offset, metadataSize,
                                                         ett_pulsar,
                                                         NULL,
-                                                        "Message / %s / %llu",
+                                                        "Message / %s / %" G_GINT64_MODIFIER "u",
                                                         msgMetadata.producer_name().c_str(),
                                                         msgMetadata.sequence_id());
     proto_tree_add_string(md_tree, hf_pulsar_producer_name, tvb, offset, metadataSize,
@@ -292,7 +297,7 @@ void link_to_response_frame(proto_tree* cmd_tree, tvbuff_t* tvb, int offset, int
 /* This method dissects fully reassembled messages */
 static int dissect_pulsar_message(tvbuff_t *tvb, packet_info* pinfo, proto_tree* tree,
                                void* data _U_) {
-    col_set_str(pinfo->cinfo, COL_PROTOCOL, "yahoo-Pulsar");
+    col_set_str(pinfo->cinfo, COL_PROTOCOL, "Pulsar");
 
     conversation_t* conversation = find_or_create_conversation(pinfo);
     ConnectionState* state = (ConnectionState*) conversation_get_proto_data(conversation,
@@ -447,7 +452,7 @@ static int dissect_pulsar_message(tvbuff_t *tvb, packet_info* pinfo, proto_tree*
 
             ProducerData& producerData = state->producers[send.producer_id()];
 
-            col_append_fstr(pinfo->cinfo, COL_INFO, " / %s / %llu",
+            col_append_fstr(pinfo->cinfo, COL_INFO, " / %s / %" G_GINT64_MODIFIER "u",
                             producerData.producerName.c_str(), send.sequence_id());
 
             if (tree) {
@@ -481,7 +486,7 @@ static int dissect_pulsar_message(tvbuff_t *tvb, packet_info* pinfo, proto_tree*
             data.ackTimestamp.nsecs = pinfo->fd->abs_ts.nsecs;
 
             ProducerData& producerData = state->producers[send_receipt.producer_id()];
-            col_append_fstr(pinfo->cinfo, COL_INFO, " / %s / %llu",
+            col_append_fstr(pinfo->cinfo, COL_INFO, " / %s / %" G_GINT64_MODIFIER "u",
                             producerData.producerName.c_str(), send_receipt.sequence_id());
 
             if (tree) {
@@ -492,7 +497,7 @@ static int dissect_pulsar_message(tvbuff_t *tvb, packet_info* pinfo, proto_tree*
                 if (send_receipt.has_message_id()) {
                     const MessageIdData& messageId = send_receipt.message_id();
                     proto_tree_add_string_format(cmd_tree, hf_pulsar_message_id, tvb, cmdOffset,
-                                                 cmdSize, "", "Message Id: %llu:%llu",
+                                                 cmdSize, "", "Message Id: %" G_GINT64_MODIFIER "u:%" G_GINT64_MODIFIER "u",
                                                  messageId.ledgerid(), messageId.entryid());
                 }
 
@@ -517,7 +522,7 @@ static int dissect_pulsar_message(tvbuff_t *tvb, packet_info* pinfo, proto_tree*
             reqData.ackTimestamp.nsecs = pinfo->fd->abs_ts.nsecs;
 
             ProducerData& producerData = state->producers[send_error.producer_id()];
-            col_append_fstr(pinfo->cinfo, COL_INFO, " / %s / %llu",
+            col_append_fstr(pinfo->cinfo, COL_INFO, " / %s / %" G_GINT64_MODIFIER "u",
                             producerData.producerName.c_str(), send_error.sequence_id());
 
             if (tree) {
@@ -546,6 +551,7 @@ static int dissect_pulsar_message(tvbuff_t *tvb, packet_info* pinfo, proto_tree*
         }
         case BaseCommand::MESSAGE: {
             const CommandMessage& message = command.message();
+            state->consumers[message.consumer_id()].messages[message.message_id()];
             RequestData& data =
                     state->consumers[message.consumer_id()].messages[message.message_id()];
             data.requestFrame = pinfo->fd->num;
@@ -554,7 +560,7 @@ static int dissect_pulsar_message(tvbuff_t *tvb, packet_info* pinfo, proto_tree*
 
             const ConsumerData& consumerData = state->consumers[message.consumer_id()];
 
-            col_append_fstr(pinfo->cinfo, COL_INFO, " / %s / %llu:%llu",
+            col_append_fstr(pinfo->cinfo, COL_INFO, " / %s / %" G_GINT64_MODIFIER "u:%" G_GINT64_MODIFIER "u",
                             consumerData.consumerName.c_str(), message.message_id().ledgerid(),
                             message.message_id().entryid());
 
@@ -579,16 +585,16 @@ static int dissect_pulsar_message(tvbuff_t *tvb, packet_info* pinfo, proto_tree*
         }
         case BaseCommand::ACK: {
             const CommandAck& ack = command.ack();
-            RequestData& data = state->consumers[ack.consumer_id()].messages[ack.message_id()];
+            RequestData& data = state->consumers[ack.consumer_id()].messages[ack.message_id().Get(0)];
             data.ackFrame = pinfo->fd->num;
             data.ackTimestamp.secs = pinfo->fd->abs_ts.secs;
             data.ackTimestamp.nsecs = pinfo->fd->abs_ts.nsecs;
 
             const ConsumerData& consumerData = state->consumers[ack.consumer_id()];
 
-            col_append_fstr(pinfo->cinfo, COL_INFO, " / %s / %llu:%llu",
-                            consumerData.consumerName.c_str(), ack.message_id().ledgerid(),
-                            ack.message_id().entryid());
+            col_append_fstr(pinfo->cinfo, COL_INFO, " / %s / %" G_GINT64_MODIFIER "u:%" G_GINT64_MODIFIER "u",
+                            consumerData.consumerName.c_str(), ack.message_id().Get(0).ledgerid(),
+                            ack.message_id().Get(0).entryid());
 
             if (tree) {
                 proto_tree_add_uint64(cmd_tree, hf_pulsar_consumer_id, tvb, cmdOffset, cmdSize,
@@ -805,6 +811,76 @@ static int dissect_pulsar_message(tvbuff_t *tvb, packet_info* pinfo, proto_tree*
             break;
         case BaseCommand::PONG:
             break;
+        case BaseCommand_Type_REDELIVER_UNACKNOWLEDGED_MESSAGES:
+            break;
+        case BaseCommand_Type_PARTITIONED_METADATA:
+            break;
+        case BaseCommand_Type_PARTITIONED_METADATA_RESPONSE:
+            break;
+        case BaseCommand_Type_LOOKUP:
+            break;
+        case BaseCommand_Type_LOOKUP_RESPONSE:
+            break;
+        case BaseCommand_Type_CONSUMER_STATS:
+            break;
+        case BaseCommand_Type_CONSUMER_STATS_RESPONSE:
+            break;
+        case BaseCommand_Type_REACHED_END_OF_TOPIC:
+            break;
+        case BaseCommand_Type_SEEK:
+            break;
+        case BaseCommand_Type_GET_LAST_MESSAGE_ID:
+            break;
+        case BaseCommand_Type_GET_LAST_MESSAGE_ID_RESPONSE:
+            break;
+        case BaseCommand_Type_ACTIVE_CONSUMER_CHANGE:
+            break;
+        case BaseCommand_Type_GET_TOPICS_OF_NAMESPACE:
+            break;
+        case BaseCommand_Type_GET_TOPICS_OF_NAMESPACE_RESPONSE:
+            break;
+        case BaseCommand_Type_GET_SCHEMA:
+            break;
+        case BaseCommand_Type_GET_SCHEMA_RESPONSE:
+            break;
+        case BaseCommand_Type_AUTH_CHALLENGE:
+            break;
+        case BaseCommand_Type_AUTH_RESPONSE:
+            break;
+        case BaseCommand_Type_ACK_RESPONSE:
+            break;
+        case BaseCommand_Type_GET_OR_CREATE_SCHEMA:
+            break;
+        case BaseCommand_Type_GET_OR_CREATE_SCHEMA_RESPONSE:
+            break;
+        case BaseCommand_Type_NEW_TXN:
+            break;
+        case BaseCommand_Type_NEW_TXN_RESPONSE:
+            break;
+        case BaseCommand_Type_ADD_PARTITION_TO_TXN:
+            break;
+        case BaseCommand_Type_ADD_PARTITION_TO_TXN_RESPONSE:
+            break;
+        case BaseCommand_Type_ADD_SUBSCRIPTION_TO_TXN:
+            break;
+        case BaseCommand_Type_ADD_SUBSCRIPTION_TO_TXN_RESPONSE:
+            break;
+        case BaseCommand_Type_END_TXN:
+            break;
+        case BaseCommand_Type_END_TXN_RESPONSE:
+            break;
+        case BaseCommand_Type_END_TXN_ON_PARTITION:
+            break;
+        case BaseCommand_Type_END_TXN_ON_PARTITION_RESPONSE:
+            break;
+        case BaseCommand_Type_END_TXN_ON_SUBSCRIPTION:
+            break;
+        case BaseCommand_Type_END_TXN_ON_SUBSCRIPTION_RESPONSE:
+            break;
+        case BaseCommand_Type_TC_CLIENT_CONNECT_REQUEST:
+            break;
+        case BaseCommand_Type_TC_CLIENT_CONNECT_RESPONSE:
+            break;
     }
 
     return maxOffset;
@@ -824,97 +900,97 @@ static int dissect_pulsar(tvbuff_t *tvb, packet_info* pinfo, proto_tree* tree, v
 }
 
 static hf_register_info hf[] = {  //
-        { &hf_pulsar_error, { "Error", "yahoo.pulsar.error", FT_BOOLEAN, BASE_DEC,
+        { &hf_pulsar_error, { "Error", "apache.pulsar.error", FT_BOOLEAN, BASE_DEC,
         NULL, 0x0, NULL, HFILL } },  //
-                { &hf_pulsar_error_message, { "Message", "yahoo.pulsar.error_message", FT_STRING, 0,
+                { &hf_pulsar_error_message, { "Message", "apache.pulsar.error_message", FT_STRING, 0,
                 NULL, 0x0,
                 NULL, HFILL } },  //
-                { &hf_pulsar_cmd_type, { "Command Type", "yahoo.pulsar.cmd.type", FT_STRING, 0,
+                { &hf_pulsar_cmd_type, { "Command Type", "apache.pulsar.cmd.type", FT_STRING, 0,
                 NULL, 0x0,
                 NULL, HFILL } },  //
-                { &hf_pulsar_frame_size, { "Frame size", "yahoo.pulsar.frame_size", FT_UINT32, BASE_DEC,
+                { &hf_pulsar_frame_size, { "Frame size", "apache.pulsar.frame_size", FT_UINT32, BASE_DEC,
                 NULL, 0x0, NULL, HFILL } },  //
-                { &hf_pulsar_cmd_size, { "Command size", "yahoo.pulsar.cmd_size", FT_UINT32, BASE_DEC,
+                { &hf_pulsar_cmd_size, { "Command size", "apache.pulsar.cmd_size", FT_UINT32, BASE_DEC,
                 NULL, 0x0,
                 NULL, HFILL } },  //
 
-                { &hf_pulsar_client_version, { "Client version", "yahoo.pulsar.client_version", FT_STRING,
+                { &hf_pulsar_client_version, { "Client version", "apache.pulsar.client_version", FT_STRING,
                         0,
                         NULL, 0x0, NULL, HFILL } },  //
-                { &hf_pulsar_auth_method, { "Auth method", "yahoo.pulsar.auth_method", FT_STRING, 0, NULL,
+                { &hf_pulsar_auth_method, { "Auth method", "apache.pulsar.auth_method", FT_STRING, 0, NULL,
                         0x0,
                         NULL, HFILL } },  //
-                { &hf_pulsar_auth_data, { "Auth data", "yahoo.pulsar.auth_data", FT_STRING, 0,
+                { &hf_pulsar_auth_data, { "Auth data", "apache.pulsar.auth_data", FT_STRING, 0,
                 NULL, 0x0, NULL, HFILL } },  //
-                { &hf_pulsar_protocol_version, { "Protocol version", "yahoo.pulsar.protocol_version",
+                { &hf_pulsar_protocol_version, { "Protocol version", "apache.pulsar.protocol_version",
                         FT_STRING, 0,
                         NULL, 0x0, NULL, HFILL } },
 
-                { &hf_pulsar_server_version, { "Server version", "yahoo.pulsar.server_version", FT_STRING,
+                { &hf_pulsar_server_version, { "Server version", "apache.pulsar.server_version", FT_STRING,
                         0,
                         NULL, 0x0, NULL, HFILL } },  //
-                { &hf_pulsar_topic, { "Topic", "yahoo.pulsar.topic", FT_STRING, 0, NULL, 0x0,
+                { &hf_pulsar_topic, { "Topic", "apache.pulsar.topic", FT_STRING, 0, NULL, 0x0,
                 NULL, HFILL } },  //
-                { &hf_pulsar_subscription, { "Subscription", "yahoo.pulsar.subscription", FT_STRING, 0,
+                { &hf_pulsar_subscription, { "Subscription", "apache.pulsar.subscription", FT_STRING, 0,
                 NULL, 0x0, NULL, HFILL } },  //
-                { &hf_pulsar_subType, { "Subscription type:", "yahoo.pulsar.sub_type", FT_STRING, 0, NULL,
+                { &hf_pulsar_subType, { "Subscription type:", "apache.pulsar.sub_type", FT_STRING, 0, NULL,
                         0x0,
                         NULL, HFILL } },  //
-                { &hf_pulsar_consumer_id, { "Consumer Id", "yahoo.pulsar.consumer_id", FT_UINT64,
+                { &hf_pulsar_consumer_id, { "Consumer Id", "apache.pulsar.consumer_id", FT_UINT64,
                         BASE_DEC,
                         NULL, 0x0, NULL, HFILL } },  //
-                { &hf_pulsar_producer_id, { "Producer Id", "yahoo.pulsar.producer_id", FT_UINT64,
+                { &hf_pulsar_producer_id, { "Producer Id", "apache.pulsar.producer_id", FT_UINT64,
                         BASE_DEC,
                         NULL, 0x0, NULL, HFILL } },  //
 
-                { &hf_pulsar_server_error, { "Server error", "yahoo.pulsar.server_error", FT_STRING, 0,
+                { &hf_pulsar_server_error, { "Server error", "apache.pulsar.server_error", FT_STRING, 0,
                 NULL, 0x0, NULL, HFILL } },  //
-                { &hf_pulsar_ack_type, { "Ack type", "yahoo.pulsar.ack_type", FT_STRING, 0,
+                { &hf_pulsar_ack_type, { "Ack type", "apache.pulsar.ack_type", FT_STRING, 0,
                 NULL, 0x0, NULL, HFILL } },  //
 
-                { &hf_pulsar_request_id, { "Request Id", "yahoo.pulsar.request_id", FT_UINT64, BASE_DEC,
+                { &hf_pulsar_request_id, { "Request Id", "apache.pulsar.request_id", FT_UINT64, BASE_DEC,
                 NULL, 0x0, NULL, HFILL } },  //
-                { &hf_pulsar_consumer_name, { "Consumer Name", "yahoo.pulsar.consumer_name", FT_STRING,
+                { &hf_pulsar_consumer_name, { "Consumer Name", "apache.pulsar.consumer_name", FT_STRING,
                         BASE_NONE,
                         NULL, 0x0, NULL, HFILL } },  //
-                { &hf_pulsar_producer_name, { "Producer Name", "yahoo.pulsar.producer_name", FT_STRING,
+                { &hf_pulsar_producer_name, { "Producer Name", "apache.pulsar.producer_name", FT_STRING,
                         BASE_NONE,
                         NULL, 0x0, NULL, HFILL } },  //
 
-                { &hf_pulsar_sequence_id, { "Sequence Id", "yahoo.pulsar.sequence_id", FT_UINT64,
+                { &hf_pulsar_sequence_id, { "Sequence Id", "apache.pulsar.sequence_id", FT_UINT64,
                         BASE_DEC,
                         NULL, 0x0, NULL, HFILL } },  //
-                { &hf_pulsar_message_id, { "Message Id", "yahoo.pulsar.message_id", FT_STRING, BASE_NONE,
+                { &hf_pulsar_message_id, { "Message Id", "apache.pulsar.message_id", FT_STRING, BASE_NONE,
                 NULL, 0x0, NULL, HFILL } },  //
-                { &hf_pulsar_message_permits, { "Message Permits", "yahoo.pulsar.message_permits",
+                { &hf_pulsar_message_permits, { "Message Permits", "apache.pulsar.message_permits",
                         FT_UINT32, BASE_DEC,
                         NULL, 0x0, NULL, HFILL } },  //
 
-                { &hf_pulsar_publish_time, { "Publish time", "yahoo.pulsar.publish_time", FT_UINT64,
+                { &hf_pulsar_publish_time, { "Publish time", "apache.pulsar.publish_time", FT_UINT64,
                         BASE_DEC,
                         NULL, 0x0, NULL, HFILL } },  //
 
-                { &hf_pulsar_replicated_from, { "Replicated from", "yahoo.pulsar.replicated_from",
+                { &hf_pulsar_replicated_from, { "Replicated from", "apache.pulsar.replicated_from",
                         FT_STRING, BASE_NONE,
                         NULL, 0x0, NULL, HFILL } },  //
-                { &hf_pulsar_partition_key, { "Partition key", "yahoo.pulsar.partition_key", FT_STRING,
+                { &hf_pulsar_partition_key, { "Partition key", "apache.pulsar.partition_key", FT_STRING,
                         BASE_NONE,
                         NULL, 0x0, NULL, HFILL } },  //
-                { &hf_pulsar_replicate_to, { "Replicate to", "yahoo.pulsar.replicate_to", FT_STRING,
+                { &hf_pulsar_replicate_to, { "Replicate to", "apache.pulsar.replicate_to", FT_STRING,
                         BASE_NONE,
                         NULL, 0x0, NULL, HFILL } },  //
-                { &hf_pulsar_property, { "Property", "yahoo.pulsar.property", FT_STRING, BASE_NONE,
+                { &hf_pulsar_property, { "Property", "apache.pulsar.property", FT_STRING, BASE_NONE,
                 NULL, 0x0, NULL, HFILL } },  //
 
-                { &hf_pulsar_request_in, { "Request in frame", "yahoo.pulsar.request_in", FT_FRAMENUM,
+                { &hf_pulsar_request_in, { "Request in frame", "apache.pulsar.request_in", FT_FRAMENUM,
                         BASE_NONE,
                         NULL, 0, "This packet is a response to the packet with this number",
                         HFILL } },  //
-                { &hf_pulsar_response_in, { "Response in frame", "yahoo.pulsar.response_in", FT_FRAMENUM,
+                { &hf_pulsar_response_in, { "Response in frame", "apache.pulsar.response_in", FT_FRAMENUM,
                         BASE_NONE,
                         NULL, 0, "This packet will be responded in the packet with this number",
                         HFILL } },  //
-                { &hf_pulsar_publish_latency, { "Latency", "yahoo.pulsar.publish_latency",
+                { &hf_pulsar_publish_latency, { "Latency", "apache.pulsar.publish_latency",
                         FT_RELATIVE_TIME, BASE_NONE, NULL, 0x0,
                         "How long time it took to ACK message", HFILL } }, };
 
@@ -922,10 +998,11 @@ static hf_register_info hf[] = {  //
 ///
 void proto_register_pulsar() {
     // register the new protocol, protocol fields, and subtrees
+    static dissector_handle_t pulsar_handle;
 
     proto_pulsar = proto_register_protocol("Pulsar Wire Protocol", /* name       */
-                                        "Yahoo Pulsar", /* short name */
-                                        "yahoo.pulsar" /* abbrev     */
+                                        "Apache Pulsar", /* short name */
+                                        "apache.pulsar" /* abbrev     */
                                         );
 
     /* Setup protocol subtree array */
@@ -933,28 +1010,34 @@ void proto_register_pulsar() {
 
     proto_register_field_array(proto_pulsar, hf, array_length(hf));
     proto_register_subtree_array(ett, array_length(ett));
-}
-
-void proto_reg_handoff_pulsar() {
-    static dissector_handle_t pulsar_handle;
 
     pulsar_handle = create_dissector_handle(&dissect_pulsar, proto_pulsar);
     dissector_add_uint("tcp.port", PULSAR_PORT, pulsar_handle);
+    register_postdissector(pulsar_handle);
 }
 
 extern "C" {
 
-G_MODULE_EXPORT const char* version = VERSION;
+extern __attribute__((unused)) WS_DLL_PUBLIC_DEF const gchar plugin_version[] = VERSION;
+extern __attribute__((unused)) WS_DLL_PUBLIC_DEF const int plugin_want_major = VERSION_MAJOR;
+extern __attribute__((unused)) WS_DLL_PUBLIC_DEF const int plugin_want_minor = VERSION_MINOR;
 
-/* Start the functions we need for the plugin stuff */
-G_MODULE_EXPORT void plugin_register(void) {
-    if (proto_pulsar == -1) {
-        proto_register_pulsar();
-    }
+WS_DLL_PUBLIC void plugin_register(void);
+
+__attribute__((unused)) static void
+proto_reg_handoff_pulsar(void)
+{
+    /* empty */
 }
 
-G_MODULE_EXPORT void plugin_reg_handoff(void) {
-    proto_reg_handoff_pulsar();
+/* Start the functions we need for the plugin stuff */
+void
+plugin_register(void)
+{
+    static proto_plugin plug;
+    plug.register_protoinfo = proto_register_pulsar;
+    plug.register_handoff = proto_reg_handoff_pulsar; /* or NULL */
+    proto_register_plugin(&plug);
 }
 
 }

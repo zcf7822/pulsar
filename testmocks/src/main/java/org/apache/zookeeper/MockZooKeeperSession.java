@@ -44,7 +44,7 @@ public class MockZooKeeperSession extends ZooKeeper {
 
     private static final Objenesis objenesis = new ObjenesisStd();
 
-    private static final AtomicInteger sessionIdGenerator = new AtomicInteger(0);
+    private static final AtomicInteger sessionIdGenerator = new AtomicInteger(1000);
 
     public static MockZooKeeperSession newInstance(MockZooKeeper mockZooKeeper) {
         ObjectInstantiator<MockZooKeeperSession> instantiator = objenesis.getInstantiatorOf(MockZooKeeperSession.class);
@@ -80,13 +80,23 @@ public class MockZooKeeperSession extends ZooKeeper {
     @Override
     public String create(String path, byte[] data, List<ACL> acl, CreateMode createMode)
             throws KeeperException, InterruptedException {
-        return mockZooKeeper.create(path, data, acl, createMode);
+        try {
+            mockZooKeeper.overrideEpheralOwner(getSessionId());
+            return mockZooKeeper.create(path, data, acl, createMode);
+        } finally {
+            mockZooKeeper.removeEpheralOwnerOverride();
+        }
     }
 
     @Override
     public void create(final String path, final byte[] data, final List<ACL> acl, CreateMode createMode,
                        final AsyncCallback.StringCallback cb, final Object ctx) {
-        mockZooKeeper.create(path, data, acl, createMode, cb, ctx);
+        try {
+            mockZooKeeper.overrideEpheralOwner(getSessionId());
+            mockZooKeeper.create(path, data, acl, createMode, cb, ctx);
+        } finally {
+            mockZooKeeper.removeEpheralOwnerOverride();
+        }
     }
 
     @Override
@@ -177,6 +187,27 @@ public class MockZooKeeperSession extends ZooKeeper {
     @Override
     public List<OpResult> multi(Iterable<org.apache.zookeeper.Op> ops) throws InterruptedException, KeeperException {
         return mockZooKeeper.multi(ops);
+    }
+
+    @Override
+    public void addWatch(String basePath, Watcher watcher, AddWatchMode mode, VoidCallback cb, Object ctx) {
+        mockZooKeeper.addWatch(basePath, watcher, mode, cb, ctx);
+    }
+
+    @Override
+    public void addWatch(String basePath, Watcher watcher, AddWatchMode mode)
+            throws KeeperException, InterruptedException {
+        mockZooKeeper.addWatch(basePath, watcher, mode);
+    }
+
+    @Override
+    public void addWatch(String basePath, AddWatchMode mode) throws KeeperException, InterruptedException {
+        mockZooKeeper.addWatch(basePath, mode);
+    }
+
+    @Override
+    public void addWatch(String basePath, AddWatchMode mode, VoidCallback cb, Object ctx) {
+        mockZooKeeper.addWatch(basePath, mode, cb, ctx);
     }
 
     @Override

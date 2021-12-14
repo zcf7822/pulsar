@@ -29,6 +29,7 @@ import io.netty.util.concurrent.FastThreadLocal;
 
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 import java.util.Map;
@@ -45,6 +46,10 @@ import org.apache.pulsar.client.api.Range;
 import org.apache.pulsar.client.api.transaction.TxnID;
 import org.apache.pulsar.common.allocator.PulsarByteBufAllocator;
 import org.apache.pulsar.common.api.AuthData;
+import org.apache.pulsar.common.api.proto.CommandAddPartitionToTxnResponse;
+import org.apache.pulsar.common.api.proto.CommandTcClientConnectResponse;
+import org.apache.pulsar.common.api.proto.KeyLongValue;
+import org.apache.pulsar.common.api.proto.KeyValue;
 import org.apache.pulsar.common.intercept.BrokerEntryMetadataInterceptor;
 import org.apache.pulsar.common.api.proto.AuthMethod;
 import org.apache.pulsar.common.api.proto.BaseCommand;
@@ -123,6 +128,10 @@ public class Commands {
             return new BaseCommand();
         }
     };
+
+    // Return the last ProtocolVersion enum value
+    private static final int CURRENT_PROTOCOL_VERSION =
+            ProtocolVersion.values()[ProtocolVersion.values().length - 1].getValue();
 
     private static BaseCommand localCmd(BaseCommand.Type type) {
         return LOCAL_BASE_COMMAND.get()
@@ -438,6 +447,17 @@ public class Commands {
         buffer.skipBytes(metadataSize);
     }
 
+    public static long getEntryTimestamp(ByteBuf headersAndPayloadWithBrokerEntryMetadata) throws IOException {
+        // get broker timestamp first if BrokerEntryMetadata is enabled with AppendBrokerTimestampMetadataInterceptor
+        BrokerEntryMetadata brokerEntryMetadata =
+                Commands.parseBrokerEntryMetadataIfExist(headersAndPayloadWithBrokerEntryMetadata);
+        if (brokerEntryMetadata != null && brokerEntryMetadata.hasBrokerTimestamp()) {
+            return brokerEntryMetadata.getBrokerTimestamp();
+        }
+        // otherwise get the publish_time
+        return parseMessageMetadata(headersAndPayloadWithBrokerEntryMetadata).getPublishTime();
+    }
+
     public static BaseCommand newMessageCommand(long consumerId, long ledgerId, long entryId, int partition,
             int redeliveryCount, long[] ackSet) {
         BaseCommand cmd = localCmd(Type.MESSAGE);
@@ -504,6 +524,10 @@ public class Commands {
             send.setIsChunk(true);
         }
 
+        if (messageData.hasMarkerType()) {
+            send.setMarker(true);
+        }
+
         return serializeCommandSendWithSize(cmd, checksumType, messageData, payload);
     }
 
@@ -522,14 +546,16 @@ public class Commands {
             boolean createTopicIfDoesNotExist) {
         return newSubscribe(topic, subscription, consumerId, requestId, subType, priorityLevel, consumerName,
                 isDurable, startMessageId, metadata, readCompacted, isReplicated, subscriptionInitialPosition,
-                startMessageRollbackDurationInSec, schemaInfo, createTopicIfDoesNotExist, null);
+                startMessageRollbackDurationInSec, schemaInfo, createTopicIfDoesNotExist, null,
+                Collections.emptyMap());
     }
 
     public static ByteBuf newSubscribe(String topic, String subscription, long consumerId, long requestId,
                SubType subType, int priorityLevel, String consumerName, boolean isDurable, MessageIdData startMessageId,
                Map<String, String> metadata, boolean readCompacted, boolean isReplicated,
                InitialPosition subscriptionInitialPosition, long startMessageRollbackDurationInSec,
-               SchemaInfo schemaInfo, boolean createTopicIfDoesNotExist, KeySharedPolicy keySharedPolicy) {
+               SchemaInfo schemaInfo, boolean createTopicIfDoesNotExist, KeySharedPolicy keySharedPolicy,
+               Map<String, String> subscriptionProperties) {
         BaseCommand cmd = localCmd(Type.SUBSCRIBE);
         CommandSubscribe subscribe = cmd.setSubscribe()
                 .setTopic(topic)
@@ -544,6 +570,17 @@ public class Commands {
                 .setInitialPosition(subscriptionInitialPosition)
                 .setReplicateSubscriptionState(isReplicated)
                 .setForceTopicCreation(createTopicIfDoesNotExist);
+
+        if (subscriptionProperties != null && !subscriptionProperties.isEmpty()) {
+            List<KeyValue> keyValues = new ArrayList<>();
+            subscriptionProperties.forEach((key, value) -> {
+                KeyValue keyValue = new KeyValue();
+                keyValue.setKey(key);
+                keyValue.setValue(value);
+                keyValues.add(keyValue);
+            });
+            subscribe.addAllSubscriptionProperties(keyValues);
+        }
 
         if (keySharedPolicy != null) {
             KeySharedMeta keySharedMeta = subscribe.setKeySharedMeta();
@@ -589,6 +626,28 @@ public class Commands {
         return serializeWithSize(cmd);
     }
 
+    public static ByteBuf newTcClientConnectRequest(long tcId, long requestId) {
+        BaseCommand cmd = localCmd(Type.TC_CLIENT_CONNECT_REQUEST);
+        cmd.setTcClientConnectRequest().setTcId(tcId).setRequestId(requestId);
+        return serializeWithSize(cmd);
+    }
+
+    public static BaseCommand newTcClientConnectResponse(long requestId, ServerError error, String message) {
+        BaseCommand cmd = localCmd(Type.TC_CLIENT_CONNECT_RESPONSE);
+
+        CommandTcClientConnectResponse response = cmd.setTcClientConnectResponse()
+                .setRequestId(requestId);
+
+        if (error != null) {
+            response.setError(error);
+        }
+
+        if (message != null) {
+            response.setMessage(message);
+        }
+
+        return cmd;
+    }
 
     private static KeySharedMode convertKeySharedMode(org.apache.pulsar.client.api.KeySharedMode mode) {
         switch (mode) {
@@ -664,14 +723,14 @@ public class Commands {
 
     @VisibleForTesting
     public static ByteBuf newProducer(String topic, long producerId, long requestId, String producerName,
-                Map<String, String> metadata) {
-        return newProducer(topic, producerId, requestId, producerName, false, metadata);
+                Map<String, String> metadata, boolean isTxnEnabled) {
+        return newProducer(topic, producerId, requestId, producerName, false, metadata, isTxnEnabled);
     }
 
     public static ByteBuf newProducer(String topic, long producerId, long requestId, String producerName,
-                boolean encrypted, Map<String, String> metadata) {
+                boolean encrypted, Map<String, String> metadata, boolean isTxnEnabled) {
         return newProducer(topic, producerId, requestId, producerName, encrypted, metadata, null, 0, false,
-                ProducerAccessMode.Shared, Optional.empty());
+                ProducerAccessMode.Shared, Optional.empty(), isTxnEnabled);
     }
 
     private static Schema.Type getSchemaType(SchemaType type) {
@@ -708,7 +767,7 @@ public class Commands {
     public static ByteBuf newProducer(String topic, long producerId, long requestId, String producerName,
           boolean encrypted, Map<String, String> metadata, SchemaInfo schemaInfo,
           long epoch, boolean userProvidedProducerName,
-          ProducerAccessMode accessMode, Optional<Long> topicEpoch) {
+          ProducerAccessMode accessMode, Optional<Long> topicEpoch, boolean isTxnEnabled) {
         BaseCommand cmd = localCmd(Type.PRODUCER);
         CommandProducer producer = cmd.setProducer()
                 .setTopic(topic)
@@ -717,6 +776,7 @@ public class Commands {
                 .setEpoch(epoch)
                 .setUserProvidedProducerName(userProvidedProducerName)
                 .setEncrypted(encrypted)
+                .setTxnEnabled(isTxnEnabled)
                 .setProducerAccessMode(convertProducerAccessMode(accessMode));
         if (producerName != null) {
             producer.setProducerName(producerName);
@@ -794,11 +854,13 @@ public class Commands {
         boolean authoritative, LookupType lookupType, long requestId, boolean proxyThroughServiceUrl) {
         BaseCommand cmd = localCmd(Type.LOOKUP_RESPONSE);
         CommandLookupTopicResponse response = cmd.setLookupTopicResponse()
-                .setBrokerServiceUrl(brokerServiceUrl)
                 .setResponse(lookupType)
                 .setRequestId(requestId)
                 .setAuthoritative(authoritative)
                 .setProxyThroughServiceUrl(proxyThroughServiceUrl);
+        if (brokerServiceUrl != null) {
+            response.setBrokerServiceUrl(brokerServiceUrl);
+        }
         if (brokerServiceUrlTls != null) {
             response.setBrokerServiceUrlTls(brokerServiceUrlTls);
         }
@@ -1044,7 +1106,7 @@ public class Commands {
         serializedCmdPong.release();
     }
 
-    static ByteBuf newPong() {
+    public static ByteBuf newPong() {
         return cmdPong.retainedDuplicate();
     }
 
@@ -1222,10 +1284,14 @@ public class Commands {
     public static ByteBuf newAddPartitionToTxnResponse(long requestId, long txnIdMostBits, ServerError error,
            String errorMsg) {
         BaseCommand cmd = localCmd(Type.ADD_PARTITION_TO_TXN_RESPONSE);
-        cmd.setAddPartitionToTxnResponse()
+        CommandAddPartitionToTxnResponse response = cmd.setAddPartitionToTxnResponse()
                 .setRequestId(requestId)
                 .setError(error)
                 .setTxnidMostBits(txnIdMostBits);
+
+        if (errorMsg != null) {
+            response.setMessage(errorMsg);
+        }
         return serializeWithSize(cmd);
     }
 
@@ -1314,10 +1380,13 @@ public class Commands {
         return serializeWithSize(cmd);
     }
 
-    public static ByteBuf newEndTxnOnPartitionResponse(long requestId, ServerError error, String errorMsg) {
+    public static ByteBuf newEndTxnOnPartitionResponse(long requestId, ServerError error, String errorMsg,
+                                                       long txnIdLeastBits, long txnIdMostBits) {
         BaseCommand cmd = localCmd(Type.END_TXN_ON_PARTITION_RESPONSE);
         CommandEndTxnOnPartitionResponse response = cmd.setEndTxnOnPartitionResponse()
                 .setRequestId(requestId)
+                .setTxnidMostBits(txnIdMostBits)
+                .setTxnidLeastBits(txnIdLeastBits)
                 .setError(error);
         if (errorMsg != null) {
             response.setMessage(errorMsg);
@@ -1698,8 +1767,7 @@ public class Commands {
     }
 
     public static int getCurrentProtocolVersion() {
-        // Return the last ProtocolVersion enum value
-        return ProtocolVersion.values()[ProtocolVersion.values().length - 1].getValue();
+        return CURRENT_PROTOCOL_VERSION;
     }
 
     /**

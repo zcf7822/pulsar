@@ -31,70 +31,40 @@ COPY scripts/gen-yml-from-env.py /pulsar/bin
 COPY scripts/generate-zookeeper-config.sh /pulsar/bin
 COPY scripts/pulsar-zookeeper-ruok.sh /pulsar/bin
 COPY scripts/watch-znode.py /pulsar/bin
-COPY scripts/install-pulsar-client-37.sh /pulsar/bin
+COPY scripts/install-pulsar-client.sh /pulsar/bin
 
 RUN mkdir /pulsar/data
 
-### Create 2nd stage from OpenJDK image
-### and add Python dependencies (for Pulsar functions)
+### Create 2nd stage from Ubuntu image
+### and add OpenJDK and Python dependencies (for Pulsar functions)
 
-FROM openjdk:11-jdk-slim
+FROM ubuntu:20.04
 
-# 更改国内源时添加签名
-#RUN apt-get update && apt-get install -y gnupg2 \
-#    && apt-key adv --keyserver keyserver.ubuntu.com --recv-keys  7638D0442B90D010 \
-#    && apt-key adv --keyserver keyserver.ubuntu.com --recv-keys  CBF8D6FD518E17E1
+ARG DEBIAN_FRONTEND=noninteractive
 
-# 更改国内源
-COPY auxiliary/sources-tuna-bullseye.list /etc/apt/sources.list
-RUN apt-get update && apt-get upgrade
-
-# 清华源安装https证书
-RUN apt install -y apt-transport-https ca-certificates
-
-# 编译python源码并安装
-# 安装python先决条件【需要安装gcc make】
-RUN apt-get install -y build-essential checkinstall
-RUN apt-get install -y libncursesw5-dev libssl-dev \
-    libsqlite3-dev tk-dev libgdbm-dev libc6-dev libbz2-dev libffi-dev zlib1g-dev gcc make
-RUN apt-get clean all \
-	&& mkdir /usr/local/python3
-
-# 将下载好的python源码包copy到指定目录
-COPY auxiliary/Python-3.7.8.tgz  /usr/local/python3/
-# 编译python
-RUN set -ex \
-	&& cd /usr/local/python3 \
-	&& tar -xvf  Python-3.7.8.tgz \
-	&& cd Python-3.7.8 \
-	&& ./configure prefix=/usr/local/python3 \
-	&& make && make install \
-	&& ln -s /usr/local/python3/bin/python3.7 /usr/local/bin/python3.7 \
-	&& ln -s /usr/local/python3/bin/pip3 /usr/local/bin/pip3.7 \
-    && ln -s /usr/local/python3/bin/python3.7 /usr/bin/python3.7 \
-    && ln -s /usr/local/python3/bin/pip3 /usr/bin/pip3.7
-RUN set -ex \
-	&& cd /usr/local/python3 \
-	&& python3.7 -V
+COPY auxiliary/sources-tuna-ubuntu2004.list /etc/apt/sources.list
 
 
 # Install some utilities
-RUN apt-get update && apt-get install -y netcat dnsutils less procps iputils-ping \
-                 python3-setuptools python3-yaml python3-kazoo \
+RUN apt-get update \
+     && apt-get -y dist-upgrade \
+     && apt-get -y install openjdk-11-jdk-headless  netcat dnsutils less procps iputils-ping \
+                 python3.7 python3.7-dev python3-setuptools python3-yaml python3-kazoo \
                  libreadline-gplv2-dev libncursesw5-dev libssl-dev libsqlite3-dev tk-dev libgdbm-dev libc6-dev libbz2-dev \
                  curl \
+     && apt-get -y --purge autoremove \
+     && apt-get autoclean \
      && apt-get clean \
      && rm -rf /var/lib/apt/lists/*
-#
+
 RUN curl https://bootstrap.pypa.io/get-pip.py -o get-pip.py
-RUN python3.7 get-pip.py
+RUN python3 get-pip.py
 
 RUN update-alternatives --install /usr/bin/python python /usr/bin/python3 10
 
-RUN echo networkaddress.cache.ttl=1 >> $JAVA_HOME/conf/security/java.security
+ENV JAVA_HOME /usr/lib/jvm/java-11-openjdk-amd64
+RUN echo networkaddress.cache.ttl=1 >> /usr/lib/jvm/java-11-openjdk-amd64/conf/security/java.security
 ADD target/python-client/ /pulsar/pulsar-client
-
-VOLUME  ["/pulsar/conf", "/pulsar/data"]
 
 ENV PULSAR_ROOT_LOGGER=INFO,CONSOLE
 
@@ -102,5 +72,4 @@ ENV PULSAR_ROOT_LOGGER=INFO,CONSOLE
 COPY --from=pulsar /pulsar /pulsar
 WORKDIR /pulsar
 
-RUN /pulsar/bin/install-pulsar-client-37.sh
-
+RUN /pulsar/bin/install-pulsar-client.sh
