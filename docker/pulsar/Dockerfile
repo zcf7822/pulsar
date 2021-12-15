@@ -23,7 +23,7 @@ FROM busybox as pulsar
 ARG PULSAR_TARBALL
 
 ADD ${PULSAR_TARBALL} /
-#RUN mv /apache-pulsar-* /pulsar
+RUN mv /apache-pulsar-* /pulsar
 
 COPY scripts/apply-config-from-env.py /pulsar/bin
 COPY scripts/apply-config-from-env-with-prefix.py /pulsar/bin
@@ -35,10 +35,9 @@ COPY scripts/install-pulsar-client.sh /pulsar/bin
 
 RUN mkdir /pulsar/data
 
-
-
 ### Create 2nd stage from Ubuntu image
 ### and add OpenJDK and Python dependencies (for Pulsar functions)
+
 FROM ubuntu:20.04
 
 ARG DEBIAN_FRONTEND=noninteractive
