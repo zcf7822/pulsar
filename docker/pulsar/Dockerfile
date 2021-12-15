@@ -35,14 +35,18 @@ COPY scripts/install-pulsar-client.sh /pulsar/bin
 
 RUN mkdir /pulsar/data
 
-COPY auxiliary/sources-tuna-ubuntu2004.list /etc/apt/sources.list
-RUN apt-get update && apt-get upgrade
+
 
 ### Create 2nd stage from Ubuntu image
 ### and add OpenJDK and Python dependencies (for Pulsar functions)
 FROM ubuntu:20.04
 
 ARG DEBIAN_FRONTEND=noninteractive
+
+
+COPY auxiliary/sources-tuna-ubuntu2004.list /etc/apt/sources.list
+RUN apt-get update && apt-get upgrade -y
+
 
 # 编译python源码并安装
 # 安装python先决条件【需要安装gcc make】
