@@ -64,13 +64,13 @@ RUN set -ex \
 	&& cd Python-3.7.8 \
 	&& ./configure prefix=/usr/local/python3 \
 	&& make && make install \
-	&& ln -s /usr/local/python3/bin/python3.7 /usr/local/bin/python3.7 \
-	&& ln -s /usr/local/python3/bin/pip3 /usr/local/bin/pip3.7 \
-    && ln -s /usr/local/python3/bin/python3.7 /usr/bin/python3.7 \
-    && ln -s /usr/local/python3/bin/pip3 /usr/bin/pip3.7
+	&& ln -s /usr/local/python3/bin/python3.7 /usr/local/bin/python3 \
+	&& ln -s /usr/local/python3/bin/pip3 /usr/local/bin/pip3 \
+    && ln -s /usr/local/python3/bin/python3.7 /usr/bin/python3 \
+    && ln -s /usr/local/python3/bin/pip3 /usr/bin/pip3
 RUN set -ex \
 	&& cd /usr/local/python3 \
-	&& python3.7 -V
+	&& python3 -V
 
 
 # Install some utilities
@@ -86,7 +86,7 @@ RUN apt-get update \
      && rm -rf /var/lib/apt/lists/*
 
 RUN curl https://bootstrap.pypa.io/get-pip.py -o get-pip.py
-RUN python3.7 get-pip.py
+RUN python3 get-pip.py
 
 RUN update-alternatives --install /usr/bin/python python /usr/bin/python3 10
 
